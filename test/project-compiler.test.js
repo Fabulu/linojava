@@ -98,6 +98,27 @@ test("yielding host calls carry their requested browser delay", async () => {
   });
 });
 
+test("direct calls use an available portable service fast path", async () => {
+  const source = `
+    "variables" result = 0;
+    "programme"
+      => Fast Service;
+      [result] = A;
+      end;
+    "service Fast Service"
+      A = 1;
+      A + 1;
+      end;
+  `;
+  let calls = 0;
+  const program = await compileProject("service.lino", { resolveSource() { return source; } }, {
+    host: { intrinsics: { "service:fastservice"(machine) { calls += 1; machine.A = 42; } } },
+  });
+  assert.equal(program.run(10).status, "halted");
+  assert.equal(calls, 1);
+  assert.equal(program.machine.memory[program.linked.symbols.get("result").value], 42);
+});
+
 test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript", async () => {
   const source = `
     "variables" dividend = 0ffffffffh; divisor = 2; float one = 1f; float two = 2f; result = 0;

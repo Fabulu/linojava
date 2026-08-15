@@ -100,8 +100,41 @@ const IDS = Object.freeze({
   spaceProject: "native:vhspace.txt:3c924fe2",
 });
 
+const SERVICE_IDS = Object.freeze({
+  pgfA: "service:pgfa",
+  pgfB: "service:pgfb",
+  pgfStoreA: "service:pgfsa",
+  pgfMove: "service:pgfmov",
+  pgfLoadFloat32: "service:pgfldf32",
+  pgfLoadFloat64: "service:pgfldf64",
+  pgfStoreFloat32: "service:pgfstf32",
+  pgfSetFloat32: "service:pgfsetf32",
+  pgfNarrow: "service:pgfnarrow",
+  pgfAdd: "service:pgfadd",
+  pgfSubtract: "service:pgfsub",
+  pgfMultiply: "service:pgfmul",
+  pgfDivide: "service:pgfquo",
+  pgfReverseSubtract: "service:pgfrsub",
+  pgfReverseDivide: "service:pgfrquo",
+  pgfInteger: "service:pgfint",
+  pgfFromInteger: "service:pgffromint",
+});
+
+const symbolCaches = new WeakMap();
+const dataViewCaches = new WeakMap();
+const float32Scratch = new DataView(new ArrayBuffer(4));
+
 function address(linked, name) {
-  const symbol = linked.symbols.get(canonicalName(name));
+  let cache = symbolCaches.get(linked);
+  if (!cache) {
+    cache = new Map();
+    symbolCaches.set(linked, cache);
+  }
+  let symbol = cache.get(name);
+  if (!symbol) {
+    symbol = linked.symbols.get(canonicalName(name));
+    if (symbol) cache.set(name, symbol);
+  }
   if (!symbol) throw new ReferenceError(`Missing Noctis Lino symbol ${name}`);
   return symbol.value >>> 0;
 }
@@ -112,7 +145,12 @@ function floatingPoint(machine) {
 }
 
 function dataView(memory) {
-  return new DataView(memory.buffer, memory.byteOffset, memory.byteLength);
+  let view = dataViewCaches.get(memory);
+  if (!view) {
+    view = new DataView(memory.buffer, memory.byteOffset, memory.byteLength);
+    dataViewCaches.set(memory, view);
+  }
+  return view;
 }
 
 function readFloat64(memory, unit) {
@@ -124,17 +162,13 @@ function writeFloat64(memory, unit, number) {
 }
 
 function float32Bits(number) {
-  const scratch = new ArrayBuffer(4);
-  const view = new DataView(scratch);
-  view.setFloat32(0, number, true);
-  return view.getInt32(0, true);
+  float32Scratch.setFloat32(0, number, true);
+  return float32Scratch.getInt32(0, true);
 }
 
 function float32FromBits(bits) {
-  const scratch = new ArrayBuffer(4);
-  const view = new DataView(scratch);
-  view.setInt32(0, bits, true);
-  return view.getFloat32(0, true);
+  float32Scratch.setInt32(0, bits, true);
+  return float32Scratch.getFloat32(0, true);
 }
 
 function adjacentFloat32(number, upward) {
@@ -313,6 +347,89 @@ function spillExtended(memory, linked, slotName, value, control) {
 
 function value(memory, linked, name) {
   return memory[address(linked, name)] | 0;
+}
+
+function copyQword(memory, source, destination) {
+  memory[destination] = memory[source];
+  memory[destination + 1] = memory[source + 1];
+}
+
+function pgfSlot(memory, linked, indexName) {
+  return (address(linked, "fw") + 2 * value(memory, linked, indexName)) >>> 0;
+}
+
+function pgfLoadA(machine, linked) {
+  const source = pgfSlot(machine.memory, linked, "PGFi");
+  copyQword(machine.memory, source, address(linked, "FA0"));
+  machine.A = source | 0;
+}
+
+function pgfLoadB(machine, linked) {
+  const source = pgfSlot(machine.memory, linked, "PGFi");
+  copyQword(machine.memory, source, address(linked, "FB0"));
+  machine.A = source | 0;
+}
+
+function pgfStoreA(machine, linked) {
+  const destination = pgfSlot(machine.memory, linked, "PGFi");
+  copyQword(machine.memory, address(linked, "FA0"), destination);
+  machine.A = destination | 0;
+}
+
+function pgfMove(machine, linked) {
+  const source = pgfSlot(machine.memory, linked, "PGFi");
+  const destination = pgfSlot(machine.memory, linked, "PGFj");
+  copyQword(machine.memory, source, destination);
+  machine.A = source | 0;
+  machine.C = destination | 0;
+}
+
+function pgfLoadFloat32(machine, linked) {
+  machine.memory[address(linked, "FS0")] = value(machine.memory, linked, "PGFt");
+  loadFloat32(machine, linked);
+}
+
+function pgfLoadFloat64(machine, linked) {
+  const memory = machine.memory;
+  memory[address(linked, "FA0")] = value(memory, linked, "PGFt");
+  memory[address(linked, "FA0") + 1] = value(memory, linked, "PGFu");
+}
+
+function pgfStoreFloat32(machine, linked) {
+  storeFloat32(machine, linked);
+  machine.memory[address(linked, "PGFt")] = value(machine.memory, linked, "FS0");
+}
+
+function pgfSetFloat32(machine, linked) {
+  pgfLoadFloat32(machine, linked);
+  pgfStoreA(machine, linked);
+}
+
+function pgfNarrow(machine, linked) {
+  pgfLoadA(machine, linked);
+  narrowFloat32(machine, linked);
+  pgfStoreA(machine, linked);
+}
+
+function pgfBinary(machine, linked, operation) {
+  pgfLoadB(machine, linked);
+  operation(machine, linked);
+}
+
+function pgfReverseBinary(machine, linked, operation) {
+  const memory = machine.memory;
+  copyQword(memory, address(linked, "FA0"), address(linked, "FT0"));
+  pgfLoadA(machine, linked);
+  copyQword(memory, address(linked, "FT0"), address(linked, "FB0"));
+  operation(machine, linked);
+}
+
+function pgfInteger(machine, linked) {
+  convertFloatToIntNear(machine, linked);
+}
+
+function pgfFromInteger(machine, linked) {
+  convertIntToFloat(machine, linked);
 }
 
 function noctisBuffer(linked, offsetName) {
@@ -1489,9 +1606,27 @@ function spaceProject(machine, linked) {
 }
 
 export const NOCTIS_INTRINSIC_IDS = IDS;
+export const NOCTIS_SERVICE_INTRINSIC_IDS = SERVICE_IDS;
 
 export function createNoctisIntrinsics(overrides = {}) {
   return {
+    [SERVICE_IDS.pgfA]: pgfLoadA,
+    [SERVICE_IDS.pgfB]: pgfLoadB,
+    [SERVICE_IDS.pgfStoreA]: pgfStoreA,
+    [SERVICE_IDS.pgfMove]: pgfMove,
+    [SERVICE_IDS.pgfLoadFloat32]: pgfLoadFloat32,
+    [SERVICE_IDS.pgfLoadFloat64]: pgfLoadFloat64,
+    [SERVICE_IDS.pgfStoreFloat32]: pgfStoreFloat32,
+    [SERVICE_IDS.pgfSetFloat32]: pgfSetFloat32,
+    [SERVICE_IDS.pgfNarrow]: pgfNarrow,
+    [SERVICE_IDS.pgfAdd]: (machine, linked) => pgfBinary(machine, linked, addFloat64),
+    [SERVICE_IDS.pgfSubtract]: (machine, linked) => pgfBinary(machine, linked, subtractFloat64),
+    [SERVICE_IDS.pgfMultiply]: (machine, linked) => pgfBinary(machine, linked, multiplyFloat64),
+    [SERVICE_IDS.pgfDivide]: (machine, linked) => pgfBinary(machine, linked, divideFloat64),
+    [SERVICE_IDS.pgfReverseSubtract]: (machine, linked) => pgfReverseBinary(machine, linked, subtractFloat64),
+    [SERVICE_IDS.pgfReverseDivide]: (machine, linked) => pgfReverseBinary(machine, linked, divideFloat64),
+    [SERVICE_IDS.pgfInteger]: pgfInteger,
+    [SERVICE_IDS.pgfFromInteger]: pgfFromInteger,
     [IDS.copyRegion]: copyRegion,
     [IDS.expandIndexed]: expandIndexed,
     [IDS.scale2x]: scale2x,

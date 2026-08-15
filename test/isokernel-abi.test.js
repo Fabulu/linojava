@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   KERNEL_UNITS, OFFSETS, COMMAND_OFFSETS, READ, GET_DIR, RETRACE,
+  GET_CONSOLE_INPUT, CLEAR_CONSOLE_BUFFER, KEY_OFFSETS,
   READ_POINTER, READ_TIME, READ_UTC_TIME, READ_COUNTS, SLEEP,
   createIsoKernelMemory, dispatchIsoKernel,
 } from "../src/compiler/isokernel-abi.js";
@@ -24,6 +25,22 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   memory[OFFSETS.DisplayCommand] = RETRACE;
   assert.equal(dispatchIsoKernel(memory, { retrace: () => true }).yielded, true);
   assert.equal(memory[OFFSETS.DisplayCommand], 0);
+
+  const consoleInput = [65, 66];
+  memory[OFFSETS.ConsoleCommand] = GET_CONSOLE_INPUT;
+  assert.equal(dispatchIsoKernel(memory, { consoleInput }).success, true);
+  assert.equal(memory[OFFSETS.ConsoleInput], 65);
+  memory[OFFSETS.ConsoleCommand] = CLEAR_CONSOLE_BUFFER;
+  dispatchIsoKernel(memory, { consoleInput });
+  assert.deepEqual(consoleInput, []);
+  memory[OFFSETS.ConsoleCommand] = GET_CONSOLE_INPUT;
+  assert.equal(dispatchIsoKernel(memory, { consoleInput }).status, 0x6661696c);
+
+  dispatchIsoKernel(memory, { keys: { keyw: true, keyleft: true } });
+  assert.equal(memory[KEY_OFFSETS.keyw], 1);
+  assert.equal(memory[KEY_OFFSETS.keyleft], 1);
+  dispatchIsoKernel(memory, { keys: {} });
+  assert.equal(memory[KEY_OFFSETS.keyw], 0);
 
   memory[OFFSETS.PointerCommand] = READ_POINTER;
   dispatchIsoKernel(memory, { pointer: { status: 5, x: 12, y: 34, deltaX: -2 } });

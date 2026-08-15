@@ -13,6 +13,8 @@ export const LAST_KERNEL_UNIT = KERNEL_UNITS - 1;
 export const COMMANDS = Object.freeze({
   IDLE: 0,
   RETRACE: 1,
+  GET_CONSOLE_INPUT: 10,
+  CLEAR_CONSOLE_BUFFER: 11,
   READ_POINTER: 12,
   READ: 14,
   GET_DIR: 20,
@@ -23,6 +25,8 @@ export const COMMANDS = Object.freeze({
 });
 export const IDLE = COMMANDS.IDLE;
 export const RETRACE = COMMANDS.RETRACE;
+export const GET_CONSOLE_INPUT = COMMANDS.GET_CONSOLE_INPUT;
+export const CLEAR_CONSOLE_BUFFER = COMMANDS.CLEAR_CONSOLE_BUFFER;
 export const READ = COMMANDS.READ;
 export const GET_DIR = COMMANDS.GET_DIR;
 export const READ_POINTER = COMMANDS.READ_POINTER;
@@ -118,6 +122,9 @@ const keyNames = [
   "keyshift", "keycontrol", "keyalternate", "keypause", "keynumlock",
   "keycapslock", "keyscrolllock", "keyunclassified",
 ];
+export const KEY_OFFSETS = Object.freeze(Object.fromEntries(
+  keyNames.map((name, index) => [name, 32792 + index]),
+));
 const workspaceEntries = [
   ["isokernel", 0], ["ramtop", 1], ["priority", 2], ["commandline", 3],
   ["displaycommand", 32771], ["displaystatus", 32772], ["displayorigin", 32773],
@@ -176,10 +183,17 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
   let sleepMilliseconds = 0;
   const fileCommand = memory[at(OFFSETS.FileCommand)];
   const displayCommand = memory[at(OFFSETS.DisplayCommand)];
+  const consoleCommand = memory[at(OFFSETS.ConsoleCommand)];
   const pointerCommand = memory[at(OFFSETS.PointerCommand)];
   const timerCommand = memory[at(OFFSETS.SYStimeCommand)];
   const processCommand = memory[at(OFFSETS.ProcessCommand)];
   try {
+    const keys = typeof host.keys === "function" ? host.keys() : host.keys;
+    if (keys) {
+      for (const [name, offset] of Object.entries(KEY_OFFSETS)) {
+        memory[at(offset)] = keys[name] ? 1 : 0;
+      }
+    }
     if (displayCommand === RETRACE) {
       const result = host.retrace?.(
         memory[at(OFFSETS.DisplayOrigin)], memory[at(OFFSETS.DisplayWidth)],
@@ -187,6 +201,18 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
         { liveRegion: memory[at(OFFSETS.DisplayLiveRegion)] },
       );
       yielded ||= result === true || result?.yield === true;
+    }
+    if (consoleCommand === GET_CONSOLE_INPUT) {
+      let input;
+      if (typeof host.readConsoleInput === "function") input = host.readConsoleInput();
+      else if (Array.isArray(host.consoleInput)) input = host.consoleInput.shift();
+      else input = host.consoleInput;
+      if (input === undefined || input === null) success = false;
+      else memory[at(OFFSETS.ConsoleInput)] = Number(input) | 0;
+    } else if (consoleCommand === CLEAR_CONSOLE_BUFFER) {
+      host.clearConsoleInput?.();
+      if (Array.isArray(host.consoleInput)) host.consoleInput.length = 0;
+      memory[at(OFFSETS.ConsoleInput)] = 0;
     }
     if (fileCommand === READ) {
       const source = host.stockfile ?? host.stockFile ?? [];

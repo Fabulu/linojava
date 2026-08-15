@@ -6,7 +6,9 @@ interpreter.
 
 The current vertical slice is an ahead-of-time JavaScript backend. It resolves
 symbols while building, groups source instructions into basic blocks, and emits
-native JavaScript arithmetic over an `Int32Array` Lino workspace. The browser
+native JavaScript arithmetic over an `Int32Array` Lino workspace. Straight-line
+instructions fall through generated JavaScript cases without paying a switch
+dispatch for every source statement. The browser
 host owns display, input, audio, persistence, and other `isocall` services.
 JavaScript is the product backend: performance work compiles larger Lino regions
 into optimized JavaScript and replaces historical native fragments with exact
@@ -74,6 +76,13 @@ default path ran for 160 retraces without entering an unsupported intrinsic.
 This is execution evidence for that path, not a claim that every game mode is
 already supported. Yield results carry the requested sleep duration so browser
 hosts can resume on the correct clock instead of spinning.
+
+Direct calls can use an exact portable service fast path when one is available.
+The first production family covers the hot `PGF` slot, conversion, and scalar
+arithmetic services used throughout Noctis polygon projection. The browser host
+also implements queued console characters, the live held-key table, pointer
+state, monotonic counts, and millisecond sleeps, which provides both ASCII
+commands and physical WASD, arrow, modifier, function, and keypad controls.
 
 ## Project boundaries
 

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { canonicalName } from "../src/compiler/lexer.js";
-import { createNoctisIntrinsics, NOCTIS_INTRINSIC_IDS as IDS } from "../src/intrinsics/noctis.js";
+import {
+  createNoctisIntrinsics,
+  NOCTIS_INTRINSIC_IDS as IDS,
+  NOCTIS_SERVICE_INTRINSIC_IDS as SERVICES,
+} from "../src/intrinsics/noctis.js";
 
 function fixture() {
   const names = [
@@ -25,7 +29,7 @@ function fixture() {
     "SUfmask", "SUfval",
     "PJfwbase", "PJnrv", "PJvr", "PJvr2", "PJvr22", "PJrwfbase",
     "PJdoflag", "FCWSAV", "FCWTMP", "FSW", "FCWCSAV", "FCWCHOP",
-    "FI", "FA0", "FB0", "FS0",
+    "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
     "FKNsIdentitySpill2t0", "FKNsIdentitySpill3t0", "FKNsIdentitySpill4t0",
     "FKNsIdentitySpillAllt0", "FKIsThereIdentityK1EM50", "FKProd4Spilledt0",
@@ -553,4 +557,37 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   view.setFloat64((1_880_000 + 40) * 4, 100, true);
   run(IDS.spaceProject);
   assert.deepEqual([memory[at("GCx")], memory[at("GCy")]], [180, 140]);
+
+  const serviceAddresses = {
+    FA0: 1_900_000, FB0: 1_900_010, FS0: 1_900_020, FT0: 1_900_030,
+    PGFi: 1_900_040, PGFj: 1_900_041, PGFt: 1_900_042,
+    PGFu: 1_900_043, FI: 1_900_044, fw: 1_910_000,
+  };
+  for (const [name, location] of Object.entries(serviceAddresses)) {
+    linked.symbols.get(canonicalName(name)).value = location;
+  }
+  memory[at("PGFi")] = 3;
+  view.setFloat64((at("fw") + 6) * 4, 2.5, true);
+  run(SERVICES.pgfA);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 2.5);
+  assert.equal(machine.A, at("fw") + 6);
+  view.setFloat64(at("FA0") * 4, 10, true);
+  run(SERVICES.pgfAdd);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 12.5);
+  view.setFloat64(at("FA0") * 4, 3, true);
+  run(SERVICES.pgfReverseSubtract);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), -0.5);
+  memory[at("PGFj")] = 4;
+  run(SERVICES.pgfMove);
+  assert.equal(view.getFloat64((at("fw") + 8) * 4, true), 2.5);
+  memory[at("PGFi")] = 5;
+  memory[at("PGFt")] = 0x3fa00000;
+  run(SERVICES.pgfSetFloat32);
+  assert.equal(view.getFloat64((at("fw") + 10) * 4, true), 1.25);
+  view.setFloat64(at("FA0") * 4, 2.5, true);
+  run(SERVICES.pgfInteger);
+  assert.equal(memory[at("FI")], 2);
+  memory[at("FI")] = -7;
+  run(SERVICES.pgfFromInteger);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), -7);
 });

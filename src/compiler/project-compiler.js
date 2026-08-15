@@ -2,6 +2,7 @@ import { dispatchIsoKernel, DONE, FAIL } from "./isokernel-abi.js";
 import { linkProject } from "./linker.js";
 import { loadProject } from "./project-loader.js";
 import { lowerOperands } from "./operands.js";
+import { canonicalCodeName } from "./programme.js";
 
 function expression(operand) {
   switch (operand.kind) {
@@ -109,11 +110,12 @@ function push(value) {
 
 function returnInstruction(status, index) {
   const setStatus = status === null ? "" : `X = ${status};`;
-  return `${setStatus} if (d === 0) { pc = ${index}; halted = true; return save("halted", executed); } pc = (s[--d] | 0) - 1; break;`;
+  return `${setStatus} if (d === 0) { pc = ${index}; halted = true; return save("halted", executed); } pc = (s[--d] | 0) - 1; continue runner;`;
 }
 
-function emitInstruction(instruction) {
+function emitInstruction(instruction, serviceIntrinsicIds = new Set()) {
   const next = instruction.index + 1;
+  const count = `if (executed >= maxInstructions) { pc = ${instruction.index}; return save("budget", executed); } executed += 1;`;
   let code;
   switch (instruction.op) {
     case "assign": code = destination(instruction.destination, expression(instruction.source)); break;
@@ -132,25 +134,34 @@ function emitInstruction(instruction) {
     case "push-all": code = ["A", "B", "C", "D", "E"].map(push).join(" "); break;
     case "pop-all": code = ["E", "D", "C", "B", "A"].map((name) => `if (d === 0) throw new RangeError("Lino stack underflow"); ${name} = s[--d] | 0;`).join(" "); break;
     case "stack-adjust": code = instruction.direction === "+" ? `d -= ${instruction.count}; if (d < 0) throw new RangeError("Lino stack underflow");` : `for (u = 0; u < ${instruction.count}; u += 1) { ${push("0")} }`; break;
-    case "call": code = `${push(next + 1)} pc = (${expression(instruction.target)}) - 1; break;`; return `case ${instruction.index}: { ${code} }`;
-    case "jump": return `case ${instruction.index}: { pc = (${expression(instruction.target)}) - 1; break; }`;
-    case "branch": return `case ${instruction.index}: { pc = ${predicate(instruction)} ? ((${expression(instruction.target)}) - 1) : ${next}; break; }`;
-    case "branch-status": return `case ${instruction.index}: { pc = (X === ${instruction.status === "ok" ? DONE : FAIL}) ? ((${expression(instruction.target)}) - 1) : ${next}; break; }`;
-    case "loop": code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`); return `case ${instruction.index}: { ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; break; }`;
-    case "isocall": return `case ${instruction.index}: { pc = ${next}; sync(); const result = dispatch(machine); X = result?.status === ${FAIL} || result?.success === false ? ${FAIL} : ${DONE}; if (result?.yielded || result?.yield) return { ...save("yield", executed), sleepMilliseconds: Math.max(0, Number(result?.sleepMilliseconds ?? result?.delay ?? 0) || 0) }; break; }`;
-    case "intrinsic": return `case ${instruction.index}: { sync(); native(${JSON.stringify(instruction.intrinsicId)}, machine); m=machine.memory; s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; break; }`;
-    case "end": return `case ${instruction.index}: { ${returnInstruction(DONE, instruction.index)} }`;
-    case "fail": return `case ${instruction.index}: { ${returnInstruction(FAIL, instruction.index)} }`;
-    case "leave": return `case ${instruction.index}: { ${returnInstruction(null, instruction.index)} }`;
+    case "call": {
+      const serviceId = instruction.target.kind === "immediate" && instruction.target.symbol
+        ? `service:${canonicalCodeName(instruction.target.symbol)}` : null;
+      if (serviceId && serviceIntrinsicIds.has(serviceId)) {
+        return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(serviceId)}, machine); m=machine.memory; s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
+      }
+      code = `${push(next + 1)} pc = (${expression(instruction.target)}) - 1; continue runner;`;
+      return `case ${instruction.index}: { ${count} ${code} }`;
+    }
+    case "jump": return `case ${instruction.index}: { ${count} pc = (${expression(instruction.target)}) - 1; continue runner; }`;
+    case "branch": return `case ${instruction.index}: { ${count} pc = ${predicate(instruction)} ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+    case "branch-status": return `case ${instruction.index}: { ${count} pc = (X === ${instruction.status === "ok" ? DONE : FAIL}) ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+    case "loop": code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`); return `case ${instruction.index}: { ${count} ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+    case "isocall": return `case ${instruction.index}: { ${count} pc = ${next}; sync(); const result = dispatch(machine); X = result?.status === ${FAIL} || result?.success === false ? ${FAIL} : ${DONE}; if (result?.yielded || result?.yield) return { ...save("yield", executed), sleepMilliseconds: Math.max(0, Number(result?.sleepMilliseconds ?? result?.delay ?? 0) || 0) }; }`;
+    case "intrinsic": return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(instruction.intrinsicId)}, machine); m=machine.memory; s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
+    case "end": return `case ${instruction.index}: { ${count} ${returnInstruction(DONE, instruction.index)} }`;
+    case "fail": return `case ${instruction.index}: { ${count} ${returnInstruction(FAIL, instruction.index)} }`;
+    case "leave": return `case ${instruction.index}: { ${count} ${returnInstruction(null, instruction.index)} }`;
     case "nop": code = ""; break;
     default: throw new SyntaxError(`Cannot emit Lino instruction ${instruction.op}`);
   }
-  return `case ${instruction.index}: { ${code} pc = ${next}; break; }`;
+  return `case ${instruction.index}: { ${count} ${code} pc = ${next}; }`;
 }
 
-export function emitRunner(linked) {
+export function emitRunner(linked, options = {}) {
   const instructions = lowerOperands(linked);
-  const cases = instructions.map(emitInstruction).join("\n");
+  const serviceIntrinsicIds = options.serviceIntrinsicIds ?? new Set();
+  const cases = instructions.map((instruction) => emitInstruction(instruction, serviceIntrinsicIds)).join("\n");
   return `
     const fb = new ArrayBuffer(4), fi = new Int32Array(fb), ff = new Float32Array(fb);
     const idiv = (a,b) => { b |= 0; if (b === 0) throw new RangeError("Lino division by zero"); return ((a|0)/b)|0; };
@@ -170,7 +181,7 @@ export function emitRunner(linked) {
       const sync=()=>{machine.stack=s;machine.depth=d;machine.pc=pc;machine.A=A;machine.B=B;machine.C=C;machine.D=D;machine.E=E;machine.X=X;machine.halted=halted;};
       const save=(status,count)=>{sync();return {status,instructions:count,X};};
       if(halted)return save("halted",0);
-      while(executed < maxInstructions){ executed += 1; switch(pc){
+      runner: while(true){ switch(pc){
         ${cases}
         default: halted=true; return save("halted",executed);
       }}
@@ -193,7 +204,8 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     if (typeof implementation !== "function") throw new Error(`Missing portable Lino intrinsic ${id}`);
     return implementation(machine, linked);
   };
-  const runner = new Function("dispatch", "native", emitRunner(linked))(dispatch, native);
+  const serviceIntrinsicIds = new Set(Object.keys(implementations).filter((id) => id.startsWith("service:")));
+  const runner = new Function("dispatch", "native", emitRunner(linked, { serviceIntrinsicIds }))(dispatch, native);
   const machine = {
     memory: new Int32Array(linked.initialMemory),
     stack: new Int32Array(1024), depth: 0,
