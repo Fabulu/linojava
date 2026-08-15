@@ -144,6 +144,10 @@ const IDS = Object.freeze({
   prepareQuadVectors: "native:pgproj.txt:e87d653f",
   scalePolygonBasis: "native:pgproj.txt:e133a5b8",
   doublePolygonBasis: "native:pgproj.txt:bfa7bd64",
+  mappedFacing: "native:pgproj.txt:5673201c",
+  polygonGradients: "native:pgproj.txt:5eb0a30d",
+  polygonCrossGradient: "native:pgproj.txt:00fb6dee",
+  terrainTraceRow: "native:pgproj.txt:75493f86",
 });
 
 const SERVICE_IDS = Object.freeze({
@@ -1366,6 +1370,250 @@ function doublePolygonBasis(machine, linked) {
   }
 }
 
+function mappedFacing(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const edge1 = [];
+  const edge2 = [];
+  for (const source of [504, 512, 520]) {
+    let result = scalarBinaryNumber(
+      readFloat64(memory, floats + source),
+      readFloat64(memory, floats + source + 4),
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, result);
+    result = narrowScalar(machine, linked, result);
+    edge1.push(result);
+    writeFloat64(memory, floats + 464 + edge1.length * 2 - 2, result);
+
+    result = scalarBinaryNumber(
+      readFloat64(memory, floats + source + 2),
+      readFloat64(memory, floats + source + 4),
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, result);
+    result = narrowScalar(machine, linked, result);
+    edge2.push(result);
+    writeFloat64(memory, floats + 458 + edge2.length * 2 - 2, result);
+  }
+
+  const crossTerms = [
+    [1, 2, 2, 1],
+    [2, 0, 0, 2],
+    [0, 1, 1, 0],
+  ];
+  const normal = [];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const [a1, a2, b1, b2] = crossTerms[axis];
+    const first = scalarBinaryNumber(edge1[a1], edge2[a2], control, "multiply");
+    writeFloat64(memory, floats + 496, first);
+    let second = scalarBinaryNumber(edge1[b1], edge2[b2], control, "multiply");
+    writeScalarScratch(machine, linked, second);
+    second = scalarBinaryNumber(first, second, control, "subtract");
+    writeScalarScratch(machine, linked, second);
+    const component = narrowScalar(machine, linked, second);
+    normal.push(component);
+    writeFloat64(memory, floats + 470 + axis * 2, component);
+  }
+
+  let sum = 0;
+  for (let axis = 0; axis < 3; axis += 1) {
+    let difference = scalarBinaryNumber(
+      readFloat64(memory, floats + 448 + axis * 2),
+      readFloat64(memory, floats + 508 + axis * 8),
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, difference);
+    let product = scalarBinaryNumber(difference, normal[axis], control, "multiply");
+    if (axis === 0) {
+      sum = product;
+      writeFloat64(memory, floats + 496, sum);
+    } else {
+      writeScalarScratch(machine, linked, product);
+      sum = scalarBinaryNumber(product, sum, control, "add");
+      if (axis === 1) writeFloat64(memory, floats + 496, sum);
+    }
+  }
+  writeScalarScratch(machine, linked, sum);
+  memory[address(linked, "FCret")] = !Number.isNaN(sum) && sum >= 0 ? 1 : 0;
+}
+
+function polygonGradient(machine, linked, xi, yi, xo, yo, scale, destination) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const first = scalarBinaryNumber(
+    readFloat64(memory, floats + xi * 2),
+    readFloat64(memory, floats + yi * 2),
+    control,
+    "multiply",
+  );
+  writeFloat64(memory, floats + 502, first);
+  let second = scalarBinaryNumber(
+    readFloat64(memory, floats + xo * 2),
+    readFloat64(memory, floats + yo * 2),
+    control,
+    "multiply",
+  );
+  writeScalarScratch(machine, linked, second);
+  second = scalarBinaryNumber(first, second, control, "subtract");
+  writeScalarScratch(machine, linked, second);
+  second = scalarBinaryNumber(
+    second,
+    readFloat64(memory, floats + scale * 2),
+    control,
+    "multiply",
+  );
+  writeScalarScratch(machine, linked, second);
+  const narrowed = narrowScalar(machine, linked, second);
+  writeFloat64(memory, floats + destination * 2, narrowed);
+  writeScalarScratch(machine, linked, narrowed);
+}
+
+function polygonGradients(machine, linked) {
+  for (const record of [
+    [0xeb, 0xe7, 0xed, 0xe5, 0xf6, 0],
+    [0xeb, 0xea, 0xed, 0xe8, 0xf6, 1],
+    [0xe8, 0xe7, 0xea, 0xe5, 0x1a, 2],
+    [0xed, 0xe6, 0xec, 0xe7, 0xf5, 3],
+    [0xed, 0xe9, 0xec, 0xea, 0xf5, 4],
+    [0xea, 0xe6, 0xe9, 0xe7, 0x1a, 5],
+    [0xec, 0xe5, 0xeb, 0xe6, 0xf4, 6],
+    [0xec, 0xe8, 0xeb, 0xe9, 0xf4, 7],
+    [0xe9, 0xe5, 0xe8, 0xe6, 0x12, 8],
+  ]) polygonGradient(machine, linked, ...record);
+}
+
+function polygonCrossGradient(machine, linked) {
+  const memory = machine.memory;
+  polygonGradient(
+    machine,
+    linked,
+    value(memory, linked, "CLxi"),
+    value(memory, linked, "CLyi"),
+    value(memory, linked, "CLxo"),
+    value(memory, linked, "CLyo"),
+    value(memory, linked, "CLbnd"),
+    value(memory, linked, "CLt"),
+  );
+}
+
+function terrainTraceRow(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const row = value(memory, linked, "SPi") | 0;
+  const ipart = value(memory, linked, "PJipartbase") >>> 0;
+  const spill = (number) => {
+    writeScalarScratch(machine, linked, number);
+    return number;
+  };
+  let factor = spill(memory[ipart + row] | 0);
+  factor = spill(scalarBinaryNumber(
+    factor,
+    readFloat64(memory, floats + 38),
+    control,
+    "subtract",
+  ));
+  factor = scalarBinaryNumber(
+    factor,
+    readFloat64(memory, floats + 36),
+    control,
+    "add",
+  );
+  writeFloat64(memory, floats + 502, factor);
+
+  let z = scalarBinaryNumber(
+    factor,
+    readFloat64(memory, floats + 10),
+    control,
+    "multiply",
+  );
+  writeFloat64(memory, floats + 496, z);
+  let vertical = spill(row);
+  vertical = spill(scalarBinaryNumber(
+    vertical,
+    readFloat64(memory, floats + 40),
+    control,
+    "subtract",
+  ));
+  vertical = spill(scalarBinaryNumber(
+    vertical,
+    readFloat64(memory, floats + 4),
+    control,
+    "multiply",
+  ));
+  z = spill(scalarBinaryNumber(vertical, z, control, "add"));
+  z = scalarBinaryNumber(z, readFloat64(memory, floats + 16), control, "add");
+  writeFloat64(memory, floats + 498, z);
+  writeFloat64(memory, floats + 30, narrowScalar(machine, linked, z));
+
+  let reciprocal = spill(scalarBinaryNumber(
+    readFloat64(memory, floats + 36),
+    z,
+    control,
+    "divide",
+  ));
+  reciprocal = narrowScalar(machine, linked, reciprocal);
+  writeFloat64(memory, floats + 24, reciprocal);
+
+  const coordinate = (axisVector, gradient, origin, destination) => {
+    let result = scalarBinaryNumber(
+      factor,
+      readFloat64(memory, floats + axisVector),
+      control,
+      "multiply",
+    );
+    writeFloat64(memory, floats + 496, result);
+    let rowPart = spill(row);
+    rowPart = spill(scalarBinaryNumber(
+      rowPart,
+      readFloat64(memory, floats + 40),
+      control,
+      "subtract",
+    ));
+    rowPart = spill(scalarBinaryNumber(
+      rowPart,
+      readFloat64(memory, floats + gradient),
+      control,
+      "multiply",
+    ));
+    result = spill(scalarBinaryNumber(rowPart, result, control, "add"));
+    result = spill(scalarBinaryNumber(
+      result,
+      readFloat64(memory, floats + origin),
+      control,
+      "add",
+    ));
+    result = narrowScalar(machine, linked, result);
+    writeFloat64(memory, floats + destination, result);
+    return result;
+  };
+  const x = coordinate(6, 0, 12, 26);
+  const y = coordinate(8, 2, 14, 28);
+
+  let texture = spill(scalarBinaryNumber(
+    x,
+    readFloat64(memory, floats + 32),
+    control,
+    "multiply",
+  ));
+  texture = spill(scalarBinaryNumber(texture, reciprocal, control, "multiply"));
+  memory[address(linked, "SPu")] = convertToInt32(texture, control);
+  texture = spill(scalarBinaryNumber(
+    y,
+    readFloat64(memory, floats + 34),
+    control,
+    "multiply",
+  ));
+  texture = spill(scalarBinaryNumber(texture, reciprocal, control, "multiply"));
+  memory[address(linked, "SPv")] = convertToInt32(texture, control);
+}
+
 function enterFloatingPoint(machine, linked) {
   const fpu = floatingPoint(machine);
   machine.memory[address(linked, "FCWSAV")] = (fpu.control | 0x40) & 0xffff;
@@ -2371,6 +2619,10 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.prepareQuadVectors]: (machine, linked) => preparePolygonVectors(machine, linked, 3),
     [IDS.scalePolygonBasis]: scalePolygonBasis,
     [IDS.doublePolygonBasis]: doublePolygonBasis,
+    [IDS.mappedFacing]: mappedFacing,
+    [IDS.polygonGradients]: polygonGradients,
+    [IDS.polygonCrossGradient]: polygonCrossGradient,
+    [IDS.terrainTraceRow]: terrainTraceRow,
     ...overrides,
   };
 }
