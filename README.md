@@ -57,8 +57,13 @@ Use `compileProject(entry, resolvers, options)` for linked Lino projects. The
 resolver callbacks can fetch source and stockfiles from URLs, browser `File`
 objects, a virtual filesystem, or a build tool. The older `compile(source)`
 entry remains available for small single-source programs. Browser presentation
-of the real iGUI framebuffer is the next product step; the current public site
-still runs the earlier probe.
+of the real iGUI framebuffer and pointer-driven menu is live at
+[linoctis.pages.dev](https://linoctis.pages.dev/).
+
+The current Noctis closure loads 73 modules containing 56,753 programme
+statements. All ordinary statements now parse, including unsigned apostrophe
+arithmetic and float predicates. Exactly 204 embedded native fragments remain;
+each is rejected explicitly until its portable JavaScript intrinsic is added.
 
 ## Project boundaries
 

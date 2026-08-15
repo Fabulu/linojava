@@ -66,8 +66,11 @@ function integerBinary(operator, left, right) {
   if (operator === "+") return `((${left}) + (${right}))`;
   if (operator === "-") return `((${left}) - (${right}))`;
   if (operator === "*") return `Math.imul(${left}, ${right})`;
+  if (operator === "'*") return `Math.imul(${left}, ${right})`;
   if (operator === "/") return `idiv(${left}, ${right})`;
+  if (operator === "'/") return `udiv(${left}, ${right})`;
   if (operator === "%") return `irem(${left}, ${right})`;
+  if (operator === "'%") return `urem(${left}, ${right})`;
   if (operator === "&") return `((${left}) & (${right}))`;
   if (operator === "|") return `((${left}) | (${right}))`;
   if (operator === "#") return `((${left}) ^ (${right}))`;
@@ -88,6 +91,10 @@ function integerBinary(operator, left, right) {
 function predicate(instruction) {
   const left = expression(instruction.left);
   const right = expression(instruction.right);
+  if (instruction.floating) {
+    const operator = instruction.operator === "=" ? "===" : instruction.operator;
+    return `(fread(${left}) ${operator} fread(${right}))`;
+  }
   if (instruction.operator === "+") return `(((${left}) & (${right})) !== 0)`;
   if (instruction.operator === "-") return `(((${left}) & (${right})) === 0)`;
   const a = instruction.unsigned ? `((${left}) >>> 0)` : `((${left}) | 0)`;
@@ -147,9 +154,12 @@ export function emitRunner(linked) {
     const fb = new ArrayBuffer(4), fi = new Int32Array(fb), ff = new Float32Array(fb);
     const idiv = (a,b) => { b |= 0; if (b === 0) throw new RangeError("Lino division by zero"); return ((a|0)/b)|0; };
     const irem = (a,b) => { b |= 0; if (b === 0) throw new RangeError("Lino division by zero"); return ((a|0)%b)|0; };
+    const udiv = (a,b) => { b >>>= 0; if (b === 0) throw new RangeError("Lino division by zero"); return (((a>>>0)/b)>>>0)|0; };
+    const urem = (a,b) => { b >>>= 0; if (b === 0) throw new RangeError("Lino division by zero"); return (((a>>>0)%b)>>>0)|0; };
     const rol = (a,b) => { const n=(b&31); return n===0?(a|0):((a<<n)|(a>>>(32-n))); };
     const ror = (a,b) => { const n=(b&31); return n===0?(a|0):((a>>>n)|(a<<(32-n))); };
     const itof = (a) => { ff[0]=Math.fround(a|0); return fi[0]|0; };
+    const fread = (a) => { fi[0]=a|0; return ff[0]; };
     const ftoi = (a) => { fi[0]=a|0; const x=ff[0]; const f=Math.floor(x), r=x-f; return (r<0.5?f:r>0.5?f+1:((f&1)?f+1:f))|0; };
     const fop = (a,b,o) => { fi[0]=a|0; const x=ff[0]; fi[0]=b|0; const y=ff[0]; ff[0]=Math.fround(o===0?x+y:o===1?x-y:o===2?x*y:x/y); return fi[0]|0; };
     return function run(machine, maxInstructions = 10000000) {

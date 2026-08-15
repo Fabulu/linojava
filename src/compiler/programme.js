@@ -3,6 +3,7 @@ import { canonicalName } from "./lexer.js";
 const TERMINATORS = new Set(["end", "fail", "leave", "isocall", "nop"]);
 const BINARY_OPERATORS = [
   "++", "--", "**", "//", ",=", "=,", "<>", "<<", ">>", "<@", "@>",
+  "'*", "'/", "'%",
   "+", "-", "*", "/", "%", "&", "|", "#", "<", ">",
 ];
 
@@ -60,7 +61,8 @@ function parseMutation(text, item) {
 }
 
 function parsePredicate(text, item) {
-  const [condition, target] = splitArrow(text.slice(1).trim(), item);
+  const floating = text.startsWith("??");
+  const [condition, target] = splitArrow(text.slice(floating ? 2 : 1).trim(), item);
   if (!target) throw location(item, "Predicate has no branch target");
   if (/^(ok|failed)$/i.test(condition)) {
     return { op: "branch-status", status: condition.toLowerCase(), target };
@@ -75,12 +77,16 @@ function parsePredicate(text, item) {
     operator: match[2],
     right: match[3].trim(),
     target,
+    floating,
   };
 }
 
 export function parseProgrammeStatement(item) {
   const text = item.text.trim();
   const lower = text.toLowerCase();
+  if (text.includes("{") || text.includes("}")) {
+    throw location(item, "Native programme fragment needs a portable intrinsic");
+  }
   if (TERMINATORS.has(lower)) return { op: lower };
   if (text === "---->") return { op: "push-all" };
   if (text === "<----") return { op: "pop-all" };
@@ -102,6 +108,8 @@ export function parseProgrammeStatement(item) {
   if (popPrefix) return { op: "pop", destination: popPrefix[1].trim() };
   const popSuffix = /^(.*?)\s*<--$/s.exec(text);
   if (popSuffix) return { op: "pop", destination: popSuffix[1].trim() };
+  const postfixNot = /^(.*?)\s+!$/.exec(text);
+  if (postfixNot) return { op: "unary", operator: "!", destination: postfixNot[1].trim() };
   return parseMutation(text, item);
 }
 

@@ -100,3 +100,10 @@ The next browser wave presents that framebuffer in Linoctis, replacing the
 temporary probe with Lino-drawn iGUI chrome, then maps a real pointer click
 back into Lino memory. Analysis of the full Noctis entry will enumerate every
 required portable intrinsic instead of ignoring native fragments.
+
+That presentation wave is now live. The full current `work/vhgame.txt` closure
+also loads as 73 modules and 56,753 programme statements. Unsigned apostrophe
+multiply/divide/remainder, postfix NOT, and float predicates are implemented;
+every ordinary statement parses. The remaining 204 compile stops are all
+explicit native-fragment diagnostics. They are the finite portable-intrinsic
+boundary for the next execution waves.

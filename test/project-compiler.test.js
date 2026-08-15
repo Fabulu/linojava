@@ -83,3 +83,21 @@ test("compileProject attaches its linked stockfile to the default host", async (
     [3, 1, 4, 1, 5],
   );
 });
+
+test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript", async () => {
+  const source = `
+    "variables" dividend = 0ffffffffh; divisor = 2; float one = 1f; float two = 2f; result = 0;
+    "programme"
+      A = [dividend]; A '/ [divisor]; [result] = A;
+      B = [dividend]; B '% [divisor]; B !;
+      ?? [float one] < [float two] -> Good;
+      fail;
+    "Good"
+      end;
+  `;
+  const program = await compileProject("unsigned.lino", { resolveSource() { return source; } });
+  const result = program.run(30);
+  assert.equal(result.X, 0x646f6e65);
+  assert.equal(program.machine.memory[program.linked.symbols.get("result").value], 0x7fffffff);
+  assert.equal(program.machine.B, -2);
+});
