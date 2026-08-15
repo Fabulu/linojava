@@ -241,10 +241,12 @@ const SERVICE_IDS = Object.freeze({
   rotateSelectedVertices: "service:pjrotateselected",
   projectMapGeneric: "service:pjprojectmapgenericservice",
   project3d: "service:pjproject3dservice",
+  drawPolygon: "service:pgdrawb",
 });
 
 const symbolCaches = new WeakMap();
 const dataViewCaches = new WeakMap();
+const rasterAddressCaches = new WeakMap();
 const float32Scratch = new DataView(new ArrayBuffer(4));
 
 function address(linked, name) {
@@ -1638,6 +1640,224 @@ function fillHaloFallback(machine, linked) {
     count = (count - 1) >>> 0;
   }
   finishRasterFill(memory, linked, offset, byte);
+}
+
+function rasterAddresses(linked) {
+  let cached = rasterAddressCaches.get(linked);
+  if (cached) return cached;
+  const names = [
+    "mp", "SADPT", "DBn", "DB8n", "DBflar", "DBcol", "DBent", "DBseg",
+    "DBlimy", "DBlimx", "DBbytes", "DBdi", "DBdi0", "DBsi", "DBbx",
+    "DBdx", "DBcx", "DBal", "DBah", "DBdl", "DBtmp", "DBmode", "BXminx",
+    "BXmaxx", "BXminy", "BXmaxy", "PGj", "PGdi", "PGval", "SCdi", "SCcx",
+    "CSbyte", "CSrows", "CSfb1", "CSseg", "SGxp", "SGyp", "SGxa", "SGya",
+    "SGpi", "SGpf", "SGa", "SGb", "SGL", "SGch", "SGgx", "SGgy", "SGt",
+  ];
+  cached = Object.fromEntries(names.map((name) => [name, address(linked, name)]));
+  cached.page = noctisBuffer(linked, "SADPT");
+  rasterAddressCaches.set(linked, cached);
+  return cached;
+}
+
+function drawPolygonSegment(machine, linked, p) {
+  const memory = machine.memory;
+  memory[p.CSseg] = (memory[p.CSseg] + 1) | 0;
+  let xp = memory[p.SGxp] | 0;
+  let yp = memory[p.SGyp] | 0;
+  let xa = memory[p.SGxa] | 0;
+  let ya = memory[p.SGya] | 0;
+  if (xp === xa) {
+    const low = (ya >>> 0) < (yp >>> 0) ? ya : yp;
+    const high = (ya >>> 0) < (yp >>> 0) ? yp : ya;
+    let offset = (Math.imul(low, 320) + xp + 4) & 0xffff;
+    const limit = (Math.imul((high + 1) | 0, 320) + 4) & 0xffff;
+    memory[p.SGpi] = offset;
+    memory[p.SGpf] = limit;
+    do {
+      memory[p.page + offset] = 0xff;
+      offset = (offset + 320) & 0xffff;
+    } while ((offset >>> 0) < (limit >>> 0));
+    memory[p.SGpi] = offset;
+    memory[p.PGdi] = (offset - 320) & 0xffff;
+    memory[p.PGval] = 0xff;
+    return;
+  }
+  if ((xa >>> 0) < (xp >>> 0)) {
+    [xp, xa] = [xa, xp];
+    [yp, ya] = [ya, yp];
+    memory[p.SGxp] = xp;
+    memory[p.SGxa] = xa;
+    memory[p.SGyp] = yp;
+    memory[p.SGya] = ya;
+  }
+  let xDelta = (xa - xp) | 0;
+  memory[p.SGa] = xDelta;
+  let length = xDelta;
+  memory[p.SGL] = length;
+  memory[p.SGch] = 0;
+  let yDelta = (ya - yp) | 0;
+  if ((ya >>> 0) < (yp >>> 0)) {
+    memory[p.SGch] = 255;
+    yDelta = (-yDelta) | 0;
+  }
+  memory[p.SGb] = yDelta;
+  if ((yDelta >>> 0) >= (length >>> 0)) length = yDelta;
+  length = (length + 1) | 0;
+  memory[p.SGL] = length;
+  let globalX = xp << 16;
+  let globalY = yp << 16;
+  memory[p.SGgx] = globalX;
+  memory[p.SGgy] = globalY;
+  const divisor = length & 0xffff;
+  xDelta = (Math.trunc((xDelta << 16 >>> 0) / divisor) & 0xffff) | 0;
+  yDelta = (Math.trunc((yDelta << 16 >>> 0) / divisor) & 0xffff) | 0;
+  memory[p.SGa] = xDelta;
+  memory[p.SGb] = yDelta;
+  if (memory[p.SGch] !== 0) {
+    yDelta = (-yDelta) | 0;
+    memory[p.SGb] = yDelta;
+  }
+  const limit = xa << 16;
+  memory[p.SGt] = limit;
+  let offset = 0;
+  do {
+    offset = ((Math.imul(globalY >> 16, 320) & 0xffff) + ((globalX >> 16) & 0xffff) + 4) & 0xffff;
+    memory[p.page + offset] = 0xff;
+    globalX = (globalX + xDelta) | 0;
+    globalY = (globalY + yDelta) | 0;
+  } while ((globalX >>> 0) < (limit >>> 0));
+  memory[p.SGgx] = globalX;
+  memory[p.SGgy] = globalY;
+  memory[p.PGdi] = offset;
+  memory[p.PGval] = 0xff;
+}
+
+function drawPolygon(machine, linked) {
+  const memory = machine.memory;
+  const p = rasterAddresses(linked);
+  const count = memory[p.DBn] | 0;
+  memory[p.DB8n] = Math.imul((count - 1) | 0, 8) | 0;
+  let minimumX = memory[p.BXminx] | 0;
+  let maximumX = memory[p.BXmaxx] | 0;
+  const minimumY = memory[p.BXminy] | 0;
+  const maximumY = memory[p.BXmaxy] | 0;
+  let colour = memory[p.DBcol] | 0;
+  const flare = memory[p.DBflar] | 0;
+
+  if (flare === 0 && minimumY === maximumY) {
+    if (minimumX === maximumX) {
+      const rawOffset = ((Math.imul(minimumY, 320) + minimumX) & 0xffff) + 4;
+      memory[p.PGdi] = rawOffset;
+      memory[p.PGval] = colour;
+      memory[p.page + (rawOffset & 0xffff)] = colour & 0xff;
+      memory[p.CSbyte] = (memory[p.CSbyte] + 1) | 0;
+      return;
+    }
+    let offset = (Math.imul(minimumY, 320) + maximumX) & 0xffff;
+    memory[p.DBtmp] = offset;
+    while ((maximumX >>> 0) >= (minimumX >>> 0)) {
+      const destination = (offset + 4) & 0xffff;
+      memory[p.PGdi] = destination;
+      memory[p.PGval] = colour;
+      memory[p.page + destination] = colour & 0xff;
+      memory[p.CSbyte] = (memory[p.CSbyte] + 1) | 0;
+      maximumX = (maximumX - 1) & 0xffff;
+      memory[p.BXmaxx] = maximumX;
+      offset = (offset - 1) & 0xffff;
+      memory[p.DBtmp] = offset;
+    }
+    return;
+  }
+
+  memory[p.PGj] = 0;
+  for (let edge = 0; edge < count - 1; edge += 1) {
+    const point = p.mp + edge * 2;
+    memory[p.SGxp] = memory[point];
+    memory[p.SGyp] = memory[point + 1];
+    memory[p.SGxa] = memory[point + 2];
+    memory[p.SGya] = memory[point + 3];
+    drawPolygonSegment(machine, linked, p);
+    memory[p.PGj] = edge + 1;
+  }
+  const last = p.mp + (count - 1) * 2;
+  memory[p.SGxp] = memory[last];
+  memory[p.SGyp] = memory[last + 1];
+  memory[p.SGxa] = memory[p.mp];
+  memory[p.SGya] = memory[p.mp + 1];
+  drawPolygonSegment(machine, linked, p);
+
+  let segment = (Math.imul(minimumY, 320) + minimumX) & 0xffff;
+  let lastRow = (Math.imul(maximumY, 320) + minimumX) & 0xffff;
+  const lastColumn = (segment + maximumX - minimumX) & 0xffff;
+  const bytes = (lastColumn - segment + 2) & 0xffff;
+  memory[p.DBseg] = segment;
+  memory[p.DBlimy] = lastRow;
+  memory[p.DBlimx] = lastColumn;
+  memory[p.DBbytes] = bytes;
+  if (![0, 1, 2, 4].includes(flare)) return;
+  lastRow = (lastRow + 4) & 0xffff;
+  let rowOffset = (segment + 4) & 0xffff;
+  memory[p.DBlimy] = lastRow;
+  memory[p.DBdi] = rowOffset;
+  if (flare === 1) {
+    colour &= 63;
+    memory[p.DBcol] = colour;
+  }
+
+  do {
+    memory[p.CSrows] = (memory[p.CSrows] + 1) | 0;
+    memory[p.DBdi0] = rowOffset;
+    memory[p.DBdi] = rowOffset;
+    databaseScan(machine, linked);
+    const mode = memory[p.DBmode] | 0;
+    if (mode !== 0) {
+      let start;
+      let fillCount;
+      if (mode === 2) {
+        memory[p.CSfb1] = (memory[p.CSfb1] + 1) | 0;
+        const scanStart = ((memory[p.DBsi] | 0) - 1) & 0xffff;
+        const scanEnd = ((memory[p.DBbx] | 0) - 1) & 0xffff;
+        memory[p.DBsi] = scanStart;
+        memory[p.DBbx] = scanEnd;
+        start = scanStart;
+        fillCount = (scanEnd - scanStart) & 0xffff;
+      } else {
+        const scanEnd = ((memory[p.DBdi] | 0) - 1) & 0xffff;
+        const scanStart = ((memory[p.DBsi] | 0) - 1) & 0xffff;
+        memory[p.DBdi] = scanEnd;
+        memory[p.DBsi] = scanStart;
+        start = scanStart;
+        fillCount = (scanEnd - scanStart) & 0xffff;
+      }
+      if (flare === 0 || flare === 4) {
+        if (mode !== 2) memory[p.DBdx] = fillCount;
+        memory[p.SCcx] = fillCount;
+        memory[p.SCdi] = start;
+        memory[p.DBal] = memory[p.DBcol];
+        fillBytes(machine, linked);
+      } else {
+        memory[p.DBcx] = fillCount;
+        memory[p.DBdi] = start;
+        if (flare === 1) {
+          memory[p.DBdl] = mode === 2 ? ((memory[p.DBcol] & 0xff) >>> 1) : memory[p.DBcol];
+          fillFlare(machine, linked);
+        } else if (mode === 2) fillHaloFallback(machine, linked);
+        else fillHalo(machine, linked);
+      }
+    }
+    if (flare === 4) {
+      let low = memory[p.DBcol] & 63;
+      const high = memory[p.DBcol] & 192;
+      low = (low + memory[p.DBent]) & 0xff;
+      if ((low >>> 0) > 63) low = (memory[p.DBent] & 128) !== 0 ? 0 : 63;
+      colour = (low | high) & 0xff;
+      memory[p.DBal] = low;
+      memory[p.DBah] = high;
+      memory[p.DBcol] = colour;
+    }
+    rowOffset = (memory[p.DBdi0] + 320) & 0xffff;
+    memory[p.DBdi] = rowOffset;
+  } while ((rowOffset >>> 0) <= (lastRow >>> 0));
 }
 
 function initializePolygonRows(machine, linked) {
@@ -4265,6 +4485,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.rotateSelectedVertices]: (machine, linked) => rotateVertices(machine, linked, false),
     [SERVICE_IDS.projectMapGeneric]: projectMapGeneric,
     [SERVICE_IDS.project3d]: project3d,
+    [SERVICE_IDS.drawPolygon]: drawPolygon,
     [IDS.copyRegion]: copyRegion,
     [IDS.expandIndexed]: expandIndexed,
     [IDS.scale2x]: scale2x,
