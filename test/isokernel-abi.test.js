@@ -5,6 +5,7 @@ import {
   SET_COOPERATIVE_MODE, SET_EXCLUSIVE_MODE,
   GET_CONSOLE_INPUT, CLEAR_CONSOLE_BUFFER, KEY_OFFSETS,
   READ_POINTER, READ_TIME, READ_UTC_TIME, READ_COUNTS, SLEEP,
+  K_READ, K_WRITE, K_DESTROY,
   createIsoKernelMemory, dispatchIsoKernel,
 } from "../src/compiler/isokernel-abi.js";
 
@@ -81,4 +82,23 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   assert.equal(sleepResult.yielded, true);
   assert.equal(sleepResult.sleepMilliseconds, 7);
   assert.equal(slept, 7);
+
+  const globalK = new Map();
+  memory[90] = "w".charCodeAt(0);
+  memory[91] = "i".charCodeAt(0);
+  memory[92] = "n".charCodeAt(0);
+  memory[93] = 0;
+  memory[OFFSETS.GlobalKName] = 90;
+  memory[OFFSETS.GlobalKData] = 120;
+  memory[120] = 42;
+  memory[OFFSETS.GlobalKCommand] = K_WRITE;
+  assert.equal(dispatchIsoKernel(memory, { globalK }).success, true);
+  memory[120] = 0;
+  memory[OFFSETS.GlobalKCommand] = K_READ;
+  assert.equal(dispatchIsoKernel(memory, { globalK }).success, true);
+  assert.equal(memory[120], 42);
+  memory[OFFSETS.GlobalKCommand] = K_DESTROY;
+  assert.equal(dispatchIsoKernel(memory, { globalK }).success, true);
+  memory[OFFSETS.GlobalKCommand] = K_READ;
+  assert.equal(dispatchIsoKernel(memory, { globalK }).failed, true);
 });

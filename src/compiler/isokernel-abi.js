@@ -24,6 +24,9 @@ export const COMMANDS = Object.freeze({
   READ_UTC_TIME: 28,
   READ_COUNTS: 29,
   SLEEP: 35,
+  K_READ: 49,
+  K_WRITE: 50,
+  K_DESTROY: 51,
 });
 export const IDLE = COMMANDS.IDLE;
 export const RETRACE = COMMANDS.RETRACE;
@@ -38,6 +41,9 @@ export const READ_TIME = COMMANDS.READ_TIME;
 export const READ_UTC_TIME = COMMANDS.READ_UTC_TIME;
 export const READ_COUNTS = COMMANDS.READ_COUNTS;
 export const SLEEP = COMMANDS.SLEEP;
+export const K_READ = COMMANDS.K_READ;
+export const K_WRITE = COMMANDS.K_WRITE;
+export const K_DESTROY = COMMANDS.K_DESTROY;
 export const DONE = 0x646f6e65;
 export const FAIL = 0x6661696c;
 
@@ -177,6 +183,30 @@ function bytesFrom(value) {
   return value instanceof Uint8Array ? value : new Uint8Array(value ?? []);
 }
 
+const defaultGlobalKStores = new WeakMap();
+
+function globalKStore(host) {
+  if (host.globalK instanceof Map) return host.globalK;
+  let store = defaultGlobalKStores.get(host);
+  if (!store) {
+    store = new Map();
+    defaultGlobalKStores.set(host, store);
+  }
+  return store;
+}
+
+function globalKName(memory, address) {
+  if (address < 0 || address >= memory.length) throw new RangeError("Global K name outside memory");
+  let name = "";
+  for (let index = 0; index < 24 && address + index < memory.length; index += 1) {
+    const value = memory[address + index] | 0;
+    if (value === 0) break;
+    const character = String.fromCharCode(value & 0xffff);
+    name += /[A-Za-z0-9]/.test(character) ? character : "_";
+  }
+  return name;
+}
+
 /** Dispatch the documented bring-up calls. The register file is never touched. */
 export function dispatchIsoKernel(memory, host = {}, options = {}) {
   const kernelBase = options.kernelBase ?? 0;
@@ -191,6 +221,7 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
   const pointerCommand = memory[at(OFFSETS.PointerCommand)];
   const timerCommand = memory[at(OFFSETS.SYStimeCommand)];
   const processCommand = memory[at(OFFSETS.ProcessCommand)];
+  const globalKCommand = memory[at(OFFSETS.GlobalKCommand)];
   try {
     const keys = typeof host.keys === "function" ? host.keys() : host.keys;
     if (keys) {
@@ -297,6 +328,21 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
       const result = host.sleep?.(timeout);
       sleepMilliseconds = Math.max(0, Number(result?.delay ?? result?.sleepMilliseconds ?? timeout) || 0);
       yielded ||= result === undefined || result === true || result?.yield === true;
+    }
+    if (globalKCommand === K_READ || globalKCommand === K_WRITE || globalKCommand === K_DESTROY) {
+      const name = globalKName(memory, memory[at(OFFSETS.GlobalKName)] | 0);
+      const data = memory[at(OFFSETS.GlobalKData)] | 0;
+      if (data < 0 || data + 255 > memory.length) throw new RangeError("Global K data outside memory");
+      const store = globalKStore(host);
+      if (globalKCommand === K_READ) {
+        const saved = store.get(name);
+        if (!(saved instanceof Int32Array) || saved.length !== 255) success = false;
+        else memory.set(saved, data);
+      } else if (globalKCommand === K_WRITE) {
+        store.set(name, memory.slice(data, data + 255));
+      } else if (!store.delete(name)) {
+        success = false;
+      }
     }
   } catch { success = false; memory[at(OFFSETS.FileStatus)] = 2; }
   for (const offset of COMMAND_SLOTS) memory[at(offset)] = IDLE;
