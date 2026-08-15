@@ -242,11 +242,13 @@ const SERVICE_IDS = Object.freeze({
   projectMapGeneric: "service:pjprojectmapgenericservice",
   project3d: "service:pjproject3dservice",
   drawPolygon: "service:pgdrawb",
+  poly3d: "service:pgpoly3d",
 });
 
 const symbolCaches = new WeakMap();
 const dataViewCaches = new WeakMap();
 const rasterAddressCaches = new WeakMap();
+const poly3dAddressCaches = new WeakMap();
 const float32Scratch = new DataView(new ArrayBuffer(4));
 
 function address(linked, name) {
@@ -1858,6 +1860,514 @@ function drawPolygon(machine, linked) {
     rowOffset = (memory[p.DBdi0] + 320) & 0xffff;
     memory[p.DBdi] = rowOffset;
   } while ((rowOffset >>> 0) <= (lastRow >>> 0));
+}
+
+function poly3dAddresses(linked) {
+  let cached = poly3dAddressCaches.get(linked);
+  if (cached) return cached;
+  const names = [
+    "PGFi", "PGFj", "PGi", "FI", "PJnrv", "PJmode", "PJdoflag", "PJgate",
+    "PJvr", "PJdi", "PJdx", "PJbx", "PJvv", "PJpv", "PJnv", "PJvr2", "PJvr22",
+    "PJvr3", "PJvr4", "PJvr5", "PJvr6", "BXsi", "BXn", "DBn", "CLxi", "CLyi",
+    "CLxo", "CLyo", "CLn", "CLbnd", "CLdir", "CLint", "CLo", "CLi", "CLt",
+    "CLout", "rwf", "mp", "FSRXF", "FSRYF", "FSRZF", "FSUX", "FSUY", "FSUZ",
+    "FSUNEG", "FSW0", "FSW1", "FSW2", "FSW3", "FSZK", "FSVX0", "FSVY0", "FSVX1",
+    "FSVY1", "FSVX2", "FSVY2", "FSVX3", "FSVY3", "FSLBYF", "FSUBYF", "FSLBXF",
+    "FSUBXF", "FSUNO", "FSXC", "FSYC", "PGLBX", "PGLBY", "PGUBX", "PGUBY", "fw", "FA0", "FB0", "FT0",
+    "FS0", "FSW", "FFLG", "FSINX", "FSINY", "FSINZ", "FSCAMX", "FSCAMY", "FSCAMZ",
+    "FSZZ", "FSXX", "FSYY", "FSPSB", "FSTSB", "FSPCB", "FSTCB", "FSTCA", "FSTSA",
+    "FSZ2", "FSPCA", "FSPSA",
+  ];
+  cached = {
+    ...Object.fromEntries(names.map((name) => [name, address(linked, name)])),
+    ...rasterAddresses(linked),
+  };
+  poly3dAddressCaches.set(linked, cached);
+  return cached;
+}
+
+function polyLoad(machine, linked, p, slot) {
+  const memory = machine.memory;
+  const source = p.fw + slot * 2;
+  memory[p.PGFi] = slot;
+  memory[p.FA0] = memory[source];
+  memory[p.FA0 + 1] = memory[source + 1];
+  machine.A = source | 0;
+}
+
+function polyBinary(machine, linked, p, slot, operation) {
+  const memory = machine.memory;
+  const source = p.fw + slot * 2;
+  memory[p.PGFi] = slot;
+  memory[p.FB0] = memory[source];
+  memory[p.FB0 + 1] = memory[source + 1];
+  machine.A = source | 0;
+  const left = readFloat64(memory, p.FA0);
+  const right = readFloat64(memory, p.FB0);
+  const result = operation === addFloat64 ? left + right
+    : operation === subtractFloat64 ? left - right
+      : operation === multiplyFloat64 ? left * right : left / right;
+  writeFloat64(memory, p.FA0, result);
+}
+
+function polyReverse(machine, linked, p, slot, operation) {
+  const memory = machine.memory;
+  memory[p.FT0] = memory[p.FA0];
+  memory[p.FT0 + 1] = memory[p.FA0 + 1];
+  polyLoad(machine, linked, p, slot);
+  memory[p.FB0] = memory[p.FT0];
+  memory[p.FB0 + 1] = memory[p.FT0 + 1];
+  const left = readFloat64(memory, p.FA0);
+  const right = readFloat64(memory, p.FB0);
+  writeFloat64(memory, p.FA0, operation === subtractFloat64 ? left - right : left / right);
+}
+
+function polyStore(machine, linked, p, slot, narrow = false) {
+  const memory = machine.memory;
+  const destination = p.fw + slot * 2;
+  memory[p.PGFi] = slot;
+  memory[destination] = memory[p.FA0];
+  memory[destination + 1] = memory[p.FA0 + 1];
+  machine.A = destination | 0;
+  if (narrow) {
+    const narrowed = roundFloat32(
+      readFloat64(memory, p.FA0), floatingPoint(machine).control,
+    );
+    memory[p.FS0] = float32Bits(narrowed);
+    writeFloat64(memory, p.FA0, narrowed);
+    memory[destination] = memory[p.FA0];
+    memory[destination + 1] = memory[p.FA0 + 1];
+  }
+}
+
+function polyMove(machine, linked, p, source, destination) {
+  const memory = machine.memory;
+  const sourceAddress = p.fw + source * 2;
+  const destinationAddress = p.fw + destination * 2;
+  memory[p.PGFi] = source;
+  memory[p.PGFj] = destination;
+  memory[destinationAddress] = memory[sourceAddress];
+  memory[destinationAddress + 1] = memory[sourceAddress + 1];
+  machine.A = sourceAddress | 0;
+  machine.C = destinationAddress | 0;
+}
+
+function polyInteger(machine, linked, p) {
+  machine.memory[p.FI] = convertToInt32(
+    readFloat64(machine.memory, p.FA0), floatingPoint(machine).control,
+  );
+}
+
+function polyCompare(machine, linked, p, left, right) {
+  const memory = machine.memory;
+  polyLoad(machine, linked, p, left);
+  const rightAddress = p.fw + right * 2;
+  memory[p.PGFi] = right;
+  memory[p.FB0] = memory[rightAddress];
+  memory[p.FB0 + 1] = memory[rightAddress + 1];
+  machine.A = rightAddress | 0;
+  const leftValue = readFloat64(memory, p.FA0);
+  const rightValue = readFloat64(memory, p.FB0);
+  const status = Number.isNaN(leftValue) || Number.isNaN(rightValue)
+    ? 17664 : leftValue < rightValue ? 256 : leftValue === rightValue ? 16384 : 0;
+  memory[p.FSW] = status;
+  floatingPoint(machine).status = status;
+  if ((status & 1024) !== 0) {
+    memory[p.FFLG] |= 1;
+    memory[p.FI] = 2;
+    machine.A = memory[p.FFLG] | 0;
+  } else if ((status & 16384) !== 0) {
+    memory[p.FI] = 0;
+    machine.A = status & 16384;
+  } else if ((status & 256) !== 0) {
+    memory[p.FI] = -1;
+    machine.A = -1;
+  } else {
+    memory[p.FI] = 1;
+    machine.A = 0;
+  }
+  return memory[p.FI] | 0;
+}
+
+function polyZemit(machine, linked, p) {
+  const memory = machine.memory;
+  const outside = memory[p.PJbx] | 0;
+  const visible = memory[p.PJvv] | 0;
+  const output = memory[p.PJdi] | 0;
+  const comparison = polyCompare(
+    machine, linked, p, p.FSRZF + outside, p.FSRZF + visible,
+  );
+  if (comparison === 0) {
+    polyMove(machine, linked, p, p.FSRXF + outside, p.FSUX + output);
+    polyMove(machine, linked, p, p.FSRYF + outside, p.FSUY + output);
+  } else {
+    polyLoad(machine, linked, p, p.FSUNEG);
+    polyBinary(machine, linked, p, p.FSRZF + visible, subtractFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyLoad(machine, linked, p, p.FSRZF + visible);
+    polyReverse(machine, linked, p, p.FSRZF + outside, subtractFloat64);
+    polyStore(machine, linked, p, p.FSW1);
+    polyLoad(machine, linked, p, p.FSW0);
+    polyBinary(machine, linked, p, p.FSW1, divideFloat64);
+    polyStore(machine, linked, p, p.FSZK, true);
+
+    polyLoad(machine, linked, p, p.FSW0);
+    polyBinary(machine, linked, p, p.FSW1, divideFloat64);
+    polyStore(machine, linked, p, p.FSW2);
+    polyLoad(machine, linked, p, p.FSRXF + outside);
+    polyBinary(machine, linked, p, p.FSRXF + visible, subtractFloat64);
+    polyBinary(machine, linked, p, p.FSW2, multiplyFloat64);
+    polyBinary(machine, linked, p, p.FSRXF + visible, addFloat64);
+    polyStore(machine, linked, p, p.FSUX + output, true);
+
+    polyLoad(machine, linked, p, p.FSZK);
+    polyStore(machine, linked, p, p.FSW2);
+    polyLoad(machine, linked, p, p.FSRYF + outside);
+    polyBinary(machine, linked, p, p.FSRYF + visible, subtractFloat64);
+    polyBinary(machine, linked, p, p.FSW2, multiplyFloat64);
+    polyBinary(machine, linked, p, p.FSRYF + visible, addFloat64);
+    polyStore(machine, linked, p, p.FSUY + output, true);
+  }
+  polyMove(machine, linked, p, p.FSUNEG, p.FSUZ + output);
+}
+
+function polyRotate(machine, linked, p) {
+  const memory = machine.memory;
+  const count = memory[p.PJnrv] | 0;
+  const mode = memory[p.PJmode] | 0;
+  memory[p.PJvr] = 0;
+  memory[p.PJdoflag] = 0;
+  for (let vertex = 0; vertex < count; vertex += 1) {
+    polyLoad(machine, linked, p, p.FSINZ + vertex);
+    polyBinary(machine, linked, p, p.FSCAMZ, subtractFloat64);
+    polyStore(machine, linked, p, p.FSZZ, true);
+    polyLoad(machine, linked, p, p.FSINX + vertex);
+    polyBinary(machine, linked, p, p.FSCAMX, subtractFloat64);
+    polyStore(machine, linked, p, p.FSXX, true);
+    polyLoad(machine, linked, p, p.FSINY + vertex);
+    polyBinary(machine, linked, p, p.FSCAMY, subtractFloat64);
+    polyStore(machine, linked, p, p.FSYY, true);
+
+    polyLoad(machine, linked, p, p.FSZZ);
+    polyBinary(machine, linked, p, mode === 0 ? p.FSPSB : p.FSTSB, multiplyFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyLoad(machine, linked, p, p.FSXX);
+    polyBinary(machine, linked, p, mode === 0 ? p.FSPCB : p.FSTCB, multiplyFloat64);
+    polyBinary(machine, linked, p, p.FSW0, addFloat64);
+    polyStore(machine, linked, p, p.FSRXF + vertex, true);
+
+    polyLoad(machine, linked, p, p.FSZZ);
+    polyBinary(machine, linked, p, p.FSTCB, multiplyFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyLoad(machine, linked, p, p.FSXX);
+    polyBinary(machine, linked, p, p.FSTSB, multiplyFloat64);
+    polyReverse(machine, linked, p, p.FSW0, subtractFloat64);
+    polyStore(machine, linked, p, p.FSZ2, true);
+
+    polyLoad(machine, linked, p, p.FSZ2);
+    polyBinary(machine, linked, p, p.FSTCA, multiplyFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyLoad(machine, linked, p, p.FSYY);
+    polyBinary(machine, linked, p, p.FSTSA, multiplyFloat64);
+    polyBinary(machine, linked, p, p.FSW0, addFloat64);
+    polyStore(machine, linked, p, p.FSW1);
+    polyStore(machine, linked, p, p.FSRZF + vertex, true);
+    const comparison = polyCompare(machine, linked, p, p.FSW1, p.FSUNEG);
+    const visible = comparison !== 2 && comparison >= 0 ? 1 : 0;
+    memory[p.rwf + vertex] = visible;
+    if (visible !== 0) memory[p.PJdoflag] = (memory[p.PJdoflag] + 1) | 0;
+
+    polyLoad(machine, linked, p, p.FSYY);
+    polyBinary(machine, linked, p, mode === 0 ? p.FSPCA : p.FSTCA, multiplyFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyLoad(machine, linked, p, p.FSZ2);
+    polyBinary(machine, linked, p, mode === 0 ? p.FSPSA : p.FSTSA, multiplyFloat64);
+    polyReverse(machine, linked, p, p.FSW0, subtractFloat64);
+    polyStore(machine, linked, p, p.FSRYF + vertex, true);
+    memory[p.PJvr] = vertex + 1;
+  }
+  machine.A = count;
+  machine.C = mode;
+}
+
+function polyZclip(machine, linked, p) {
+  const memory = machine.memory;
+  const count = memory[p.PJnrv] | 0;
+  memory[p.PJvr] = 0;
+  memory[p.PJdi] = 0;
+  memory[p.PJdx] = count - 1;
+  let output = 0;
+  for (let vertex = 0; vertex < count; vertex += 1) {
+    memory[p.PJvr] = vertex;
+    if ((memory[p.rwf + vertex] | 0) !== 0) {
+      polyMove(machine, linked, p, p.FSRXF + vertex, p.FSUX + output);
+      polyMove(machine, linked, p, p.FSRYF + vertex, p.FSUY + output);
+      polyMove(machine, linked, p, p.FSRZF + vertex, p.FSUZ + output);
+      output += 1;
+      memory[p.PJdi] = output;
+      continue;
+    }
+    const previous = vertex > 0 ? vertex - 1 : count - 1;
+    const next = vertex < count - 1 ? vertex + 1 : 0;
+    memory[p.PJpv] = previous;
+    memory[p.PJnv] = next;
+    const previousVisible = memory[p.rwf + previous] | 0;
+    const nextVisible = memory[p.rwf + next] | 0;
+    if (previousVisible === 0 && nextVisible === 0) continue;
+    memory[p.PJbx] = vertex;
+    if (previousVisible !== 0 && nextVisible !== 0) {
+      memory[p.PJvv] = previous;
+      polyZemit(machine, linked, p);
+      output += 1;
+      memory[p.PJdi] = output;
+      memory[p.PJvv] = next;
+      polyZemit(machine, linked, p);
+      output += 1;
+      memory[p.PJdi] = output;
+    } else {
+      memory[p.PJvv] = previousVisible !== 0 ? previous : next;
+      polyZemit(machine, linked, p);
+      output += 1;
+      memory[p.PJdi] = output;
+    }
+  }
+  memory[p.PJvr] = count;
+  memory[p.PJvr2] = output;
+  memory[p.PJvr22] = output + output;
+}
+
+function polyZload(machine, linked, p) {
+  const memory = machine.memory;
+  const count = memory[p.PJnrv] | 0;
+  memory[p.PJvr] = 0;
+  for (let vertex = 0; vertex < count; vertex += 1) {
+    polyMove(machine, linked, p, p.FSRXF + vertex, p.FSUX + vertex);
+    polyMove(machine, linked, p, p.FSRYF + vertex, p.FSUY + vertex);
+    polyMove(machine, linked, p, p.FSRZF + vertex, p.FSUZ + vertex);
+    memory[p.PJvr] = vertex + 1;
+  }
+  memory[p.PJvr2] = count;
+  memory[p.PJvr22] = count + count;
+}
+
+function polyProject3d(machine, linked, p) {
+  const memory = machine.memory;
+  const count = memory[p.PJvr2] | 0;
+  memory[p.PJvr] = 0;
+  for (let vertex = 0; vertex < count; vertex += 1) {
+    polyLoad(machine, linked, p, p.FSUNO);
+    polyBinary(machine, linked, p, p.FSUZ + vertex, divideFloat64);
+    polyStore(machine, linked, p, p.FSW3);
+    polyBinary(machine, linked, p, p.FSUX + vertex, multiplyFloat64);
+    polyBinary(machine, linked, p, p.FSXC, addFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyStore(machine, linked, p, p.FSVX0 + vertex, true);
+    polyLoad(machine, linked, p, p.FSW0);
+    polyInteger(machine, linked, p);
+    memory[p.mp + vertex * 2] = memory[p.FI];
+
+    polyLoad(machine, linked, p, p.FSW3);
+    polyBinary(machine, linked, p, p.FSUY + vertex, multiplyFloat64);
+    polyBinary(machine, linked, p, p.FSYC, addFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyStore(machine, linked, p, p.FSVY0 + vertex, true);
+    polyLoad(machine, linked, p, p.FSW0);
+    polyInteger(machine, linked, p);
+    memory[p.mp + vertex * 2 + 1] = memory[p.FI];
+    memory[p.PJvr] = vertex + 1;
+  }
+}
+
+function polyBounds(memory, p) {
+  let maximumX = p.PGLBX;
+  let maximumY = p.PGLBY;
+  let minimumX = p.PGUBX;
+  let minimumY = p.PGUBY;
+  const count = memory[p.BXn] | 0;
+  memory[p.BXmaxx] = maximumX;
+  memory[p.BXmaxy] = maximumY;
+  memory[p.BXminx] = minimumX;
+  memory[p.BXminy] = minimumY;
+  for (let vertex = count - 1; vertex >= 0; vertex -= 1) {
+    memory[p.PGi] = vertex;
+    const point = p.mp + vertex * 2;
+    const x = memory[point] | 0;
+    const y = memory[point + 1] | 0;
+    if (x < minimumX) minimumX = x;
+    if (x > maximumX) maximumX = x;
+    if (y < minimumY) minimumY = y;
+    if (y > maximumY) maximumY = y;
+    memory[p.BXminx] = minimumX;
+    memory[p.BXmaxx] = maximumX;
+    memory[p.BXminy] = minimumY;
+    memory[p.BXmaxy] = maximumY;
+  }
+  memory[p.PGi] = -1;
+  let gates = 0;
+  if (maximumX >= p.PGUBX) { gates += 1; maximumX = p.PGUBX; }
+  if (maximumY >= p.PGUBY) { gates += 1; maximumY = p.PGUBY; }
+  if (minimumX < p.PGLBX) { gates += 1; minimumX = p.PGLBX; }
+  if (minimumY < p.PGLBY) { gates += 1; minimumY = p.PGLBY; }
+  memory[p.BXsi] = gates;
+  memory[p.BXmaxx] = maximumX & 0xffff;
+  memory[p.BXmaxy] = maximumY & 0xffff;
+  memory[p.BXminx] = minimumX & 0xffff;
+  memory[p.BXminy] = minimumY & 0xffff;
+}
+
+function polyOutside(machine, linked, p, slot) {
+  const memory = machine.memory;
+  const comparison = polyCompare(machine, linked, p, slot, memory[p.CLbnd] | 0);
+  memory[p.PGFj] = 0;
+  const outside = (memory[p.CLdir] | 0) === 0
+    ? comparison === 2 || comparison < 0
+    : comparison !== 2 && comparison > 0;
+  if (outside) memory[p.PGFj] = 1;
+  return outside;
+}
+
+function polyEmit1(machine, linked, p) {
+  const memory = machine.memory;
+  const outside = memory[p.PJbx] | 0;
+  const visible = memory[p.PJvv] | 0;
+  const inputP = memory[p.CLxi] | 0;
+  const inputQ = memory[p.CLyi] | 0;
+  const outputP = memory[p.CLxo] | 0;
+  const outputQ = memory[p.CLyo] | 0;
+  const output = memory[p.CLo] | 0;
+  const comparison = polyCompare(
+    machine, linked, p, inputP + outside, inputP + visible,
+  );
+  if (comparison !== 0) {
+    polyLoad(machine, linked, p, memory[p.CLbnd] | 0);
+    polyBinary(machine, linked, p, inputP + visible, subtractFloat64);
+    polyStore(machine, linked, p, p.FSW0);
+    polyLoad(machine, linked, p, inputP + visible);
+    polyReverse(machine, linked, p, inputP + outside, subtractFloat64);
+    polyStore(machine, linked, p, p.FSW1);
+    polyLoad(machine, linked, p, p.FSW0);
+    polyBinary(machine, linked, p, p.FSW1, divideFloat64);
+    polyStore(machine, linked, p, p.FSW2);
+    polyLoad(machine, linked, p, inputQ + outside);
+    polyBinary(machine, linked, p, inputQ + visible, subtractFloat64);
+    polyBinary(machine, linked, p, p.FSW2, multiplyFloat64);
+    polyBinary(machine, linked, p, inputQ + visible, addFloat64);
+  } else polyLoad(machine, linked, p, inputQ + outside);
+
+  if ((memory[p.CLint] | 0) !== 0) {
+    polyInteger(machine, linked, p);
+    memory[p.mp + output * 2 + 1] = memory[p.FI];
+    memory[p.mp + output * 2] = p.PGUBX;
+  } else {
+    polyStore(machine, linked, p, outputQ + output);
+    polyMove(machine, linked, p, memory[p.CLbnd] | 0, outputP + output);
+  }
+}
+
+function polyClip(machine, linked, p) {
+  const memory = machine.memory;
+  const count = memory[p.CLn] | 0;
+  memory[p.CLo] = 0;
+  memory[p.CLi] = 0;
+  memory[p.PJdx] = count - 1;
+  let output = 0;
+  for (let input = 0; input < count; input += 1) {
+    memory[p.CLi] = input;
+    if (polyOutside(machine, linked, p, (memory[p.CLxi] | 0) + input)) {
+      const previous = input > 0 ? input - 1 : count - 1;
+      const next = input < count - 1 ? input + 1 : 0;
+      memory[p.PJbx] = input;
+      memory[p.PJpv] = previous;
+      memory[p.PJnv] = next;
+      const previousOutside = polyOutside(
+        machine, linked, p, (memory[p.CLxi] | 0) + previous,
+      );
+      memory[p.CLt] = previousOutside ? 1 : 0;
+      const nextOutside = polyOutside(
+        machine, linked, p, (memory[p.CLxi] | 0) + next,
+      );
+      if (previousOutside && nextOutside) continue;
+      if (!previousOutside && !nextOutside) {
+        memory[p.PJvv] = previous;
+        polyEmit1(machine, linked, p);
+        output += 1;
+        memory[p.CLo] = output;
+        memory[p.PJvv] = next;
+        polyEmit1(machine, linked, p);
+        output += 1;
+        memory[p.CLo] = output;
+      } else {
+        memory[p.PJvv] = previousOutside ? next : previous;
+        polyEmit1(machine, linked, p);
+        output += 1;
+        memory[p.CLo] = output;
+      }
+    } else if ((memory[p.CLint] | 0) === 0) {
+      polyMove(machine, linked, p, (memory[p.CLxi] | 0) + input, (memory[p.CLxo] | 0) + output);
+      polyMove(machine, linked, p, (memory[p.CLyi] | 0) + input, (memory[p.CLyo] | 0) + output);
+      output += 1;
+      memory[p.CLo] = output;
+    } else {
+      polyLoad(machine, linked, p, (memory[p.CLxi] | 0) + input);
+      polyInteger(machine, linked, p);
+      memory[p.mp + output * 2] = memory[p.FI];
+      polyLoad(machine, linked, p, (memory[p.CLyi] | 0) + input);
+      polyInteger(machine, linked, p);
+      memory[p.mp + output * 2 + 1] = memory[p.FI];
+      output += 1;
+      memory[p.CLo] = output;
+    }
+  }
+  memory[p.CLi] = count;
+  memory[p.CLout] = output;
+}
+
+function poly3d(machine, linked) {
+  const memory = machine.memory;
+  const p = poly3dAddresses(linked);
+  memory[p.PJmode] = 0;
+  polyRotate(machine, linked, p);
+  memory[p.PJgate] = 1;
+  if ((memory[p.PJdoflag] | 0) === 0) return;
+  if ((memory[p.PJdoflag] | 0) === (memory[p.PJnrv] | 0)) polyZload(machine, linked, p);
+  else {
+    polyZclip(machine, linked, p);
+    memory[p.PJgate] = 2;
+    if ((memory[p.PJvr2] | 0) < 3) return;
+  }
+
+  polyProject3d(machine, linked, p);
+  memory[p.BXn] = memory[p.PJvr2];
+  polyBounds(memory, p);
+  memory[p.PJgate] = 0;
+  if ((memory[p.BXsi] | 0) !== 0) {
+    const stages = [
+      [p.FSVY0, p.FSVX0, p.FSVY1, p.FSVX1, p.FSLBYF, 0, 0, p.PJvr3, 3],
+      [p.FSVY1, p.FSVX1, p.FSVY2, p.FSVX2, p.FSUBYF, 1, 0, p.PJvr4, 4],
+      [p.FSVX2, p.FSVY2, p.FSVX3, p.FSVY3, p.FSLBXF, 0, 0, p.PJvr5, 5],
+      [p.FSVX3, p.FSVY3, 0, 0, p.FSUBXF, 1, 1, p.PJvr6, 6],
+    ];
+    let count = memory[p.PJvr2] | 0;
+    for (const [xi, yi, xo, yo, bound, direction, integer, result, gate] of stages) {
+      memory[p.CLxi] = xi;
+      memory[p.CLyi] = yi;
+      memory[p.CLxo] = xo;
+      memory[p.CLyo] = yo;
+      memory[p.CLn] = count;
+      memory[p.CLbnd] = bound;
+      memory[p.CLdir] = direction;
+      memory[p.CLint] = integer;
+      polyClip(machine, linked, p);
+      count = memory[p.CLout] | 0;
+      memory[result] = count;
+      memory[p.PJgate] = gate;
+      if (count < 3) return;
+    }
+    memory[p.PJvr2] = memory[p.PJvr6];
+    memory[p.PJgate] = 0;
+  }
+  memory[p.DBn] = memory[p.PJvr2];
+  drawPolygon(machine, linked);
 }
 
 function initializePolygonRows(machine, linked) {
@@ -4486,6 +4996,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.projectMapGeneric]: projectMapGeneric,
     [SERVICE_IDS.project3d]: project3d,
     [SERVICE_IDS.drawPolygon]: drawPolygon,
+    [SERVICE_IDS.poly3d]: poly3d,
     [IDS.copyRegion]: copyRegion,
     [IDS.expandIndexed]: expandIndexed,
     [IDS.scale2x]: scale2x,
