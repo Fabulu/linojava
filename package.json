@@ -1,0 +1,20 @@
+{
+  "name": "@fabulu/linojava",
+  "version": "0.1.0",
+  "description": "Ahead-of-time browser compiler and host runtime for L.in.oleum",
+  "type": "module",
+  "bin": {
+    "linojava": "./bin/linojava.js"
+  },
+  "exports": {
+    ".": "./src/compiler.js"
+  },
+  "scripts": {
+    "build:demo": "node ./bin/linojava.js ./examples/browser_probe.lino ./examples/browser_probe.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
