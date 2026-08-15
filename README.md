@@ -60,10 +60,13 @@ entry remains available for small single-source programs. Browser presentation
 of the real iGUI framebuffer and pointer-driven menu is live at
 [linoctis.pages.dev](https://linoctis.pages.dev/).
 
-The current Noctis closure loads 73 modules containing 56,753 programme
-statements. All ordinary statements now parse, including unsigned apostrophe
-arithmetic and float predicates. Exactly 204 embedded native fragments remain;
-each is rejected explicitly until its portable JavaScript intrinsic is added.
+The current Noctis closure loads 73 modules and lowers to 56,945 JavaScript
+instructions. All ordinary statements now parse, including unsigned apostrophe
+arithmetic and float predicates. Its 204 embedded native fragments are explicit
+intrinsics rather than hidden interpreter operations. Portable implementations
+now cover 11 exact integer, framebuffer, page-memory, and scaling kernels. The
+remaining 193 occurrences are rejected until their JavaScript implementations
+are added.
 
 ## Project boundaries
 
