@@ -148,6 +148,9 @@ const IDS = Object.freeze({
   polygonGradients: "native:pgproj.txt:5eb0a30d",
   polygonCrossGradient: "native:pgproj.txt:00fb6dee",
   terrainTraceRow: "native:pgproj.txt:75493f86",
+  terrainEdgeRows: "native:pgtex.txt:90e8ae12",
+  polygonEdges: "native:pgtex.txt:1f274c7a",
+  terrainUvNext: "native:pgtex.txt:051b529b",
 });
 
 const SERVICE_IDS = Object.freeze({
@@ -1614,6 +1617,151 @@ function terrainTraceRow(machine, linked) {
   memory[address(linked, "SPv")] = convertToInt32(texture, control);
 }
 
+function runTerrainEdgeRows(machine, linked, bndx, slope, row, count) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const floats = value(memory, linked, "PGfwbase") >>> 0;
+  const fpart = value(memory, linked, "PGfpartbase") >>> 0;
+  const ipart = value(memory, linked, "PGipartbase") >>> 0;
+  while (count !== 0) {
+    let edge = convertToInt32(bndx, control);
+    if (edge < -10000) edge = -10000;
+    if (edge > 10000) edge = 10000;
+    memory[address(linked, "EWax")] = edge;
+    if (edge > (memory[fpart + row] | 0)) memory[fpart + row] = Math.min(edge, 311);
+    if (edge < (memory[ipart + row] | 0)) memory[ipart + row] = Math.max(edge, 5);
+    bndx = scalarBinaryNumber(bndx, slope, control, "add");
+    writeFloat64(memory, floats + 44, bndx);
+    row += 1;
+    count -= 1;
+  }
+  memory[address(linked, "EWh")] = row;
+  memory[address(linked, "EWcx")] = count;
+  writeScalarScratch(machine, linked, bndx);
+  return bndx;
+}
+
+function terrainEdgeRows(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PGfwbase") >>> 0;
+  runTerrainEdgeRows(
+    machine,
+    linked,
+    readFloat64(memory, floats + 44),
+    readFloat64(memory, floats + 42),
+    value(memory, linked, "EWh") | 0,
+    value(memory, linked, "EWcx") >>> 0,
+  );
+}
+
+function polygonEdges(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const floats = value(memory, linked, "PGfwbase") >>> 0;
+  const points = address(linked, "mp");
+  const vr22 = value(memory, linked, "EWvr22") >>> 0;
+  memory[points + vr22] = memory[points];
+  memory[points + vr22 + 1] = memory[points + 1];
+  let edgeCount = vr22 >>> 1;
+  let source = 0;
+  memory[address(linked, "EWsi")] = source;
+  memory[address(linked, "PGj")] = edgeCount;
+  while (edgeCount !== 0) {
+    let x1 = memory[points + source] | 0;
+    let y1 = memory[points + source + 1] | 0;
+    let x2 = memory[points + source + 2] | 0;
+    let y2 = memory[points + source + 3] | 0;
+    memory[address(linked, "SPt")] = x2;
+    if (y2 < y1) {
+      [x1, x2] = [x2, x1];
+      [y1, y2] = [y2, y1];
+    }
+    memory[address(linked, "EWx1")] = x1;
+    memory[address(linked, "EWy1")] = y1;
+    memory[address(linked, "EWx2")] = x2;
+    memory[address(linked, "EWy2")] = y2;
+    if (y2 !== y1) {
+      let slope = scalarBinaryNumber(x2 - x1, y2 - y1, control, "divide");
+      writeScalarScratch(machine, linked, slope);
+      slope = narrowScalar(machine, linked, slope);
+      writeFloat64(memory, floats + 42, slope);
+      memory[address(linked, "PGFi")] = 22;
+      let firstRow = y1;
+      if (y1 < 5) {
+        firstRow = 5;
+        let correction = scalarBinaryNumber(5 - y1, slope, control, "multiply");
+        writeScalarScratch(machine, linked, correction);
+        correction = scalarBinaryNumber(x1, correction, control, "add");
+        writeScalarScratch(machine, linked, correction);
+        x1 = convertToInt32(correction, control);
+        memory[address(linked, "EWx1")] = x1;
+      }
+      const lastRow = Math.min(y2, 190);
+      memory[address(linked, "EWity")] = firstRow;
+      memory[address(linked, "EWjty")] = lastRow;
+      let bndx = x1;
+      writeFloat64(memory, floats + 44, bndx);
+      writeScalarScratch(machine, linked, bndx);
+      if (firstRow < lastRow) {
+        const count = lastRow - firstRow + 1;
+        memory[address(linked, "EWcx")] = count;
+        memory[address(linked, "EWh")] = firstRow;
+        bndx = runTerrainEdgeRows(machine, linked, bndx, slope, firstRow, count);
+      }
+    }
+    source += 2;
+    edgeCount -= 1;
+    memory[address(linked, "EWsi")] = source;
+    memory[address(linked, "PGj")] = edgeCount;
+  }
+}
+
+function terrainUvNext(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PGfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const advance = (position, step, wide, narrowName) => {
+    const result = scalarBinaryNumber(
+      readFloat64(memory, floats + position),
+      readFloat64(memory, floats + step),
+      control,
+      "add",
+    );
+    writeFloat64(memory, floats + wide, result);
+    writeNamedFloat32(machine, linked, narrowName, result);
+    const narrowed = readNamedFloat32(memory, linked, narrowName);
+    writeFloat64(memory, floats + position, narrowed);
+    return result;
+  };
+  const z = advance(30, 22, 48, "PGUVZ");
+  const x = advance(26, 18, 50, "PGUVX");
+  const y = advance(28, 20, 52, "PGUVY");
+  let reciprocal = scalarBinaryNumber(
+    readFloat64(memory, floats + 36),
+    z,
+    control,
+    "divide",
+  );
+  writeFloat64(memory, floats + 54, reciprocal);
+  writeNamedFloat32(machine, linked, "PGUVK4", reciprocal);
+  reciprocal = readNamedFloat32(memory, linked, "PGUVK4");
+  writeFloat64(memory, floats + 24, reciprocal);
+  const project = (coordinate, scale, outputName) => {
+    let result = scalarBinaryNumber(
+      coordinate,
+      readFloat64(memory, floats + scale),
+      control,
+      "multiply",
+    );
+    writeFloat64(memory, floats + 54, result);
+    result = scalarBinaryNumber(result, reciprocal, control, "multiply");
+    writeFloat64(memory, floats + 54, result);
+    memory[address(linked, outputName)] = convertToInt32(result, control);
+  };
+  project(x, 32, "SPun");
+  project(y, 34, "SPvn");
+}
+
 function enterFloatingPoint(machine, linked) {
   const fpu = floatingPoint(machine);
   machine.memory[address(linked, "FCWSAV")] = (fpu.control | 0x40) & 0xffff;
@@ -2623,6 +2771,9 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.polygonGradients]: polygonGradients,
     [IDS.polygonCrossGradient]: polygonCrossGradient,
     [IDS.terrainTraceRow]: terrainTraceRow,
+    [IDS.terrainEdgeRows]: terrainEdgeRows,
+    [IDS.polygonEdges]: polygonEdges,
+    [IDS.terrainUvNext]: terrainUvNext,
     ...overrides,
   };
 }
