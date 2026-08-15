@@ -50,11 +50,11 @@ test("unmodified iGUI reaches its first real RETRACE", async (context) => {
   const linked = linkProject(await loadProject(entry, resolvers));
   assert.deepEqual(
     { instructions: linked.instructions.length, labels: linked.labels.size, unresolved: linked.unresolved.length },
-    { instructions: 4609, labels: 714, unresolved: 0 },
+    { instructions: 4619, labels: 715, unresolved: 0 },
   );
   assert.deepEqual(
     { initialized: linked.memoryLayout.initializedUnits, kernel: linked.memoryLayout.kernelBase, app: linked.memoryLayout.appData, ram: linked.memoryLayout.ramTop },
-    { initialized: 2537, kernel: 2538, app: 35485, ram: 698841 },
+    { initialized: 2539, kernel: 2540, app: 35487, ram: 698843 },
   );
 
   const hashes = [];
@@ -77,7 +77,8 @@ test("unmodified iGUI reaches its first real RETRACE", async (context) => {
     assert.equal(calls.length, 25);
     assert.deepEqual(calls.slice(0, 23), Array.from({ length: 23 }, () => [0, 14]));
     assert.deepEqual(calls.slice(23), [[0, 20], [1, 0]]);
-    const display = program.machine.memory.subarray(41822, 41822 + 400 * 300);
+    const displayOrigin = linked.symbols.get("primarydisplay").value;
+    const display = program.machine.memory.subarray(displayOrigin, displayOrigin + 400 * 300);
     assert.ok(display.some((value) => value !== 0));
     hashes.push(hashUnits(display));
   }

@@ -113,9 +113,10 @@ function returnInstruction(status, index) {
   return `${setStatus} if (d === 0) { pc = ${index}; halted = true; return save("halted", executed); } pc = (s[--d] | 0) - 1; continue runner;`;
 }
 
-function emitInstruction(instruction, serviceIntrinsicIds = new Set()) {
+function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceInlines = new Map(), count = "", profile = false) {
   const next = instruction.index + 1;
-  const count = `if (executed >= maxInstructions) { pc = ${instruction.index}; return save("budget", executed); } executed += 1;`;
+  const sampled = profile ? `prof[${instruction.index}]=(prof[${instruction.index}]+1)>>>0;` : "";
+  count = `${sampled}${count}`;
   let code;
   switch (instruction.op) {
     case "assign": code = destination(instruction.destination, expression(instruction.source)); break;
@@ -138,7 +139,9 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set()) {
       const serviceId = instruction.target.kind === "immediate" && instruction.target.symbol
         ? `service:${canonicalCodeName(instruction.target.symbol)}` : null;
       if (serviceId && serviceIntrinsicIds.has(serviceId)) {
-        return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(serviceId)}, machine); m=machine.memory; s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
+        const inline = serviceInlines.get(serviceId);
+        if (inline) return `case ${instruction.index}: { ${count} ${inline} pc=${next}; }`;
+        return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(serviceId)}, machine); m=machine.memory; md=new DataView(m.buffer,m.byteOffset,m.byteLength); s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
       }
       code = `${push(next + 1)} pc = (${expression(instruction.target)}) - 1; continue runner;`;
       return `case ${instruction.index}: { ${count} ${code} }`;
@@ -148,7 +151,7 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set()) {
     case "branch-status": return `case ${instruction.index}: { ${count} pc = (X === ${instruction.status === "ok" ? DONE : FAIL}) ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
     case "loop": code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`); return `case ${instruction.index}: { ${count} ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
     case "isocall": return `case ${instruction.index}: { ${count} pc = ${next}; sync(); const result = dispatch(machine); X = result?.status === ${FAIL} || result?.success === false ? ${FAIL} : ${DONE}; if (result?.yielded || result?.yield) return { ...save("yield", executed), sleepMilliseconds: Math.max(0, Number(result?.sleepMilliseconds ?? result?.delay ?? 0) || 0) }; }`;
-    case "intrinsic": return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(instruction.intrinsicId)}, machine); m=machine.memory; s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
+    case "intrinsic": return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(instruction.intrinsicId)}, machine); m=machine.memory; md=new DataView(m.buffer,m.byteOffset,m.byteLength); s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
     case "end": return `case ${instruction.index}: { ${count} ${returnInstruction(DONE, instruction.index)} }`;
     case "fail": return `case ${instruction.index}: { ${count} ${returnInstruction(FAIL, instruction.index)} }`;
     case "leave": return `case ${instruction.index}: { ${count} ${returnInstruction(null, instruction.index)} }`;
@@ -158,10 +161,50 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set()) {
   return `case ${instruction.index}: { ${count} ${code} pc = ${next}; }`;
 }
 
+function fallsThrough(instruction, serviceIntrinsicIds) {
+  if (instruction.op === "call") {
+    const serviceId = instruction.target.kind === "immediate" && instruction.target.symbol
+      ? `service:${canonicalCodeName(instruction.target.symbol)}` : null;
+    return serviceId !== null && serviceIntrinsicIds.has(serviceId);
+  }
+  return !new Set([
+    "jump", "branch", "branch-status", "loop", "isocall", "end", "fail", "leave",
+  ]).has(instruction.op);
+}
+
+function budgetCounts(linked, instructions, serviceIntrinsicIds) {
+  const starts = new Set([instructions[0]?.index]);
+  const present = new Set(instructions.map((instruction) => instruction.index));
+  for (const target of linked.labels.values()) if (present.has(target)) starts.add(target);
+  for (const instruction of instructions) {
+    if (!fallsThrough(instruction, serviceIntrinsicIds) && present.has(instruction.index + 1)) {
+      starts.add(instruction.index + 1);
+    }
+  }
+  starts.delete(undefined);
+  const ordered = [...starts].sort((left, right) => left - right);
+  const counts = new Map();
+  for (let index = 0; index < ordered.length; index += 1) {
+    const start = ordered[index];
+    const end = ordered[index + 1] ?? (instructions.at(-1).index + 1);
+    const length = end - start;
+    counts.set(start, `if(executed!==0&&executed+${length}>maxInstructions){pc=${start};return save("budget",executed);}executed+=${length};`);
+  }
+  return counts;
+}
+
 export function emitRunner(linked, options = {}) {
   const instructions = options.instructions ?? lowerOperands(linked);
   const serviceIntrinsicIds = options.serviceIntrinsicIds ?? new Set();
-  const cases = instructions.map((instruction) => emitInstruction(instruction, serviceIntrinsicIds)).join("\n");
+  const serviceInlines = options.serviceInlines ?? new Map();
+  const counts = options.batchBudgets === false
+    ? new Map(instructions.map((instruction) => [instruction.index,
+      `if(executed>=maxInstructions){pc=${instruction.index};return save("budget",executed);}executed+=1;`]))
+    : budgetCounts(linked, instructions, serviceIntrinsicIds);
+  const cases = instructions.map((instruction) => emitInstruction(
+    instruction, serviceIntrinsicIds, serviceInlines, counts.get(instruction.index) ?? "",
+    options.profileInstructions === true,
+  )).join("\n");
   const defaultCase = options.transfer
     ? 'default: return save("transfer", executed);'
     : 'default: halted=true; return save("halted",executed);';
@@ -178,11 +221,13 @@ export function emitRunner(linked, options = {}) {
     const ftoi = (a) => { fi[0]=a|0; const x=ff[0]; const f=Math.floor(x), r=x-f; return (r<0.5?f:r>0.5?f+1:((f&1)?f+1:f))|0; };
     const fop = (a,b,o) => { fi[0]=a|0; const x=ff[0]; fi[0]=b|0; const y=ff[0]; ff[0]=Math.fround(o===0?x+y:o===1?x-y:o===2?x*y:x/y); return fi[0]|0; };
     return function run(machine, maxInstructions = 10000000) {
-      let m=machine.memory, s=machine.stack, d=machine.depth|0, pc=machine.pc|0;
+      let m=machine.memory, md=new DataView(m.buffer,m.byteOffset,m.byteLength), s=machine.stack, d=machine.depth|0, pc=machine.pc|0, prof=machine.profile;
       let A=machine.A|0,B=machine.B|0,C=machine.C|0,D=machine.D|0,E=machine.E|0,X=machine.X|0;
       let halted=machine.halted, executed=0, q=0,u=0,v=0;
       const sync=()=>{machine.stack=s;machine.depth=d;machine.pc=pc;machine.A=A;machine.B=B;machine.C=C;machine.D=D;machine.E=E;machine.X=X;machine.halted=halted;};
       const save=(status,count)=>{sync();return {status,instructions:count,X};};
+      const f64r=(a)=>md.getFloat64((a>>>0)*4,true);
+      const f64w=(a,v)=>md.setFloat64((a>>>0)*4,v,true);
       if(halted)return save("halted",0);
       runner: while(true){ switch(pc){
         ${cases}
@@ -208,13 +253,18 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     return implementation(machine, linked);
   };
   const serviceIntrinsicIds = new Set(Object.keys(implementations).filter((id) => id.startsWith("service:")));
+  const serviceInlines = new Map(Object.entries(implementations)
+    .filter(([id, implementation]) => id.startsWith("service:") && typeof implementation.inline === "function")
+    .map(([id, implementation]) => [id, String(implementation.inline(linked))]));
   const lowered = lowerOperands(linked);
   const regionSize = Math.max(256, options.regionSize | 0 || 2048);
   const runners = [];
   for (let start = 0; start < lowered.length; start += regionSize) {
     const instructions = lowered.slice(start, Math.min(start + regionSize, lowered.length));
     runners.push(new Function("dispatch", "native", emitRunner(linked, {
-      instructions, serviceIntrinsicIds, transfer: true,
+      instructions, serviceIntrinsicIds, serviceInlines,
+      batchBudgets: options.batchBudgets, profileInstructions: options.profileInstructions,
+      transfer: true,
     }))(dispatch, native));
   }
   const machine = {
@@ -222,6 +272,7 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     stack: new Int32Array(1024), depth: 0,
     A: 0, B: 0, C: 0, D: 0, E: 0, X: DONE,
     pc: linked.entry, halted: false,
+    profile: options.profileInstructions ? new Uint32Array(lowered.length) : null,
   };
   return {
     linked, machine,
@@ -244,6 +295,7 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     },
     reset() {
       machine.memory.set(linked.initialMemory); machine.stack.fill(0); machine.depth = 0;
+      machine.profile?.fill(0);
       machine.A = machine.B = machine.C = machine.D = machine.E = 0; machine.X = DONE;
       machine.pc = linked.entry; machine.halted = false;
     },
