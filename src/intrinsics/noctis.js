@@ -29,12 +29,105 @@ const IDS = Object.freeze({
   transparentCullPixel: "native:pgtex.txt:d7cb2f13",
   duplicateHalfScan: "native:pgtex.txt:e4dc90b9",
   resetFloatingPoint: "native:vhgame.txt:9c6ea36c",
+  invertGroundSky: "native:vhground.txt:7200dd4e",
+  clearGroundPage: "native:vhground.txt:73ab03f2",
+  copyGroundBackground: "native:vhground.txt:f3ec1118",
+  drawGroundBackground: "native:vhground.txt:fbf23f03",
+  groundCachedBounds: "native:vhground.txt:0968b869",
+  groundRandomSquare: "native:vhground.txt:9cb919a1",
+  groundTileShade: "native:vhground.txt:eb31ac58",
+  loadProjectedVertices: "native:pgproj.txt:d786e423",
+  duplicateMappedInput: "native:pgproj.txt:7debfd43",
+  duplicateMappedRotation: "native:pgproj.txt:9cca6521",
+  enterFloatingPoint: "native:fpctl.txt:702d65f0",
+  leaveFloatingPoint: "native:fpctl.txt:5c4bf558",
+  loadFloatingPointControl: "native:fpctl.txt:e3c3b332",
+  readFloatingPointControl: "native:fpctl.txt:4cf1786d",
+  readFloatingPointStatus: "native:fpctl.txt:4457bfde",
+  saveChopControl: "native:fpconv.txt:723ba62b",
+  convertFloatToIntChop: "native:fpconv.txt:89dd8688",
+  convertFloatToIntNear: "native:fpconv.txt:50fd8e24",
+  convertIntToFloat: "native:fpconv.txt:13199376",
+  narrowFloat32: "native:fpconv.txt:5835de7d",
+  storeFloat32: "native:fpconv.txt:a0a7129a",
+  loadFloat32: "native:fpconv.txt:518837c4",
 });
 
 function address(linked, name) {
   const symbol = linked.symbols.get(canonicalName(name));
   if (!symbol) throw new ReferenceError(`Missing Noctis Lino symbol ${name}`);
   return symbol.value >>> 0;
+}
+
+function floatingPoint(machine) {
+  if (!machine.fpu) machine.fpu = { control: 0x037f, status: 0, stack: [] };
+  return machine.fpu;
+}
+
+function dataView(memory) {
+  return new DataView(memory.buffer, memory.byteOffset, memory.byteLength);
+}
+
+function readFloat64(memory, unit) {
+  return dataView(memory).getFloat64(unit * 4, true);
+}
+
+function writeFloat64(memory, unit, number) {
+  dataView(memory).setFloat64(unit * 4, number, true);
+}
+
+function float32Bits(number) {
+  const scratch = new ArrayBuffer(4);
+  const view = new DataView(scratch);
+  view.setFloat32(0, number, true);
+  return view.getInt32(0, true);
+}
+
+function float32FromBits(bits) {
+  const scratch = new ArrayBuffer(4);
+  const view = new DataView(scratch);
+  view.setInt32(0, bits, true);
+  return view.getFloat32(0, true);
+}
+
+function adjacentFloat32(number, upward) {
+  if (Number.isNaN(number) || number === (upward ? Infinity : -Infinity)) return number;
+  if (number === 0) return float32FromBits(upward ? 1 : 0x80000001);
+  let bits = float32Bits(number);
+  bits = number > 0 ? bits + (upward ? 1 : -1) : bits + (upward ? -1 : 1);
+  return float32FromBits(bits);
+}
+
+function roundFloat32(number, control) {
+  const nearest = Math.fround(number);
+  if ((control & 0x0c00) === 0 || nearest === number || !Number.isFinite(number)) return nearest;
+  const mode = (control >>> 10) & 3;
+  if (mode === 1 && nearest > number) return adjacentFloat32(nearest, false);
+  if (mode === 2 && nearest < number) return adjacentFloat32(nearest, true);
+  if (mode === 3) {
+    if (number > 0 && nearest > number) return adjacentFloat32(nearest, false);
+    if (number < 0 && nearest < number) return adjacentFloat32(nearest, true);
+  }
+  return nearest;
+}
+
+function nearestEven(number) {
+  const floor = Math.floor(number);
+  const fraction = number - floor;
+  if (fraction < 0.5) return floor;
+  if (fraction > 0.5) return floor + 1;
+  return (floor & 1) === 0 ? floor : floor + 1;
+}
+
+function convertToInt32(number, control) {
+  if (!Number.isFinite(number)) return -2147483648;
+  const mode = (control >>> 10) & 3;
+  const rounded = mode === 0 ? nearestEven(number)
+    : mode === 1 ? Math.floor(number)
+      : mode === 2 ? Math.ceil(number)
+        : Math.trunc(number);
+  if (rounded < -2147483648 || rounded > 2147483647) return -2147483648;
+  return rounded | 0;
 }
 
 function value(memory, linked, name) {
@@ -511,8 +604,234 @@ function duplicateHalfScan(machine, linked) {
 function resetFloatingPoint(machine, linked) {
   machine.fpu = {
     control: value(machine.memory, linked, "FCW") & 0xffff,
+    status: 0,
     stack: [],
   };
+}
+
+function invertGroundSky(machine, linked) {
+  const memory = machine.memory;
+  const source = value(memory, linked, "VHGNDbgsourcenative") >>> 0;
+  for (let index = 40000; index !== 0; index -= 1) {
+    memory[source + index] = (63 - memory[source + index]) | 0;
+  }
+}
+
+function clearGroundPage(machine, linked) {
+  const memory = machine.memory;
+  const page = value(memory, linked, "VHGNDpageclearptr") >>> 0;
+  memory.fill(0, page, page + 64000);
+}
+
+function copyGroundBackground(machine, linked) {
+  const memory = machine.memory;
+  const source = value(memory, linked, "VHGNDbgcachefrom") >>> 0;
+  const destination = value(memory, linked, "VHGNDbgcacheto") >>> 0;
+  const count = value(memory, linked, "VHGNDbgcachecount") >>> 0;
+  for (let index = 0; index < count; index += 1) {
+    memory[destination + index] = memory[source + index];
+  }
+}
+
+function drawGroundBackground(machine, linked) {
+  const memory = machine.memory;
+  let offsets = value(memory, linked, "VHGNDbgoffnative") >>> 0;
+  const source = value(memory, linked, "VHGNDbgsourcenative") >>> 0;
+  const destination = value(memory, linked, "VHGNDbgdestinationnative") >>> 0;
+  let sourceCursor = value(memory, linked, "BGbp") & 0xffff;
+  let records = value(memory, linked, "BGcxr") >>> 0;
+  const shift = value(memory, linked, "BGdx") | 0;
+  const widthAddress = address(linked, "BGw");
+  const destinationAddress = address(linked, "BGdi");
+  const pixelAddress = address(linked, "BGpx");
+  const rowAddress = address(linked, "BGi");
+  const rowBaseAddress = address(linked, "VHGNDbgrowbase");
+
+  while (records !== 0) {
+    const width = (memory[offsets] & 0xff) | ((memory[offsets + 1] & 0xff) << 8);
+    memory[widthAddress] = width;
+    if (width < 64000) {
+      let output = (width + shift) & 0xffff;
+      memory[destinationAddress] = output;
+      const pixel = memory[source + sourceCursor] & 0xff;
+      memory[pixelAddress] = pixel;
+      for (let row = 0; row < 5; row += 1) {
+        output = (Math.imul(row, 320) + (width + shift)) & 0xffff;
+        memory[rowAddress] = row;
+        memory[rowBaseAddress] = output;
+        for (let column = 0; column < 5; column += 1) {
+          memory[destination + output] = pixel;
+          output = (output + 1) & 0xffff;
+        }
+      }
+      memory[rowAddress] = 5;
+      sourceCursor = (sourceCursor + 1) & 0xffff;
+    } else {
+      sourceCursor = (sourceCursor + width - 64000) & 0xffff;
+    }
+    offsets += 2;
+    records = (records - 1) >>> 0;
+  }
+  memory[address(linked, "BGbp")] = sourceCursor;
+  memory[address(linked, "BGcxr")] = 0;
+}
+
+function groundCachedBounds(machine, linked) {
+  const memory = machine.memory;
+  const points = value(memory, linked, "VHGNDmpbase") >>> 0;
+  const minX = address(linked, "PJminx");
+  const maxX = address(linked, "PJmaxx");
+  const minY = address(linked, "BXminy");
+  const maxY = address(linked, "BXmaxy");
+  memory[minX] = 311;
+  memory[maxX] = 5;
+  memory[minY] = 190;
+  memory[maxY] = 10;
+  for (let vertex = 0; vertex < 4; vertex += 1) {
+    const x = memory[points + vertex * 2] | 0;
+    const y = memory[points + vertex * 2 + 1] | 0;
+    if (x < memory[minX]) memory[minX] = x;
+    if (x > memory[maxX]) memory[maxX] = x;
+    if (y < memory[minY]) memory[minY] = y;
+    if (y > memory[maxY]) memory[maxY] = y;
+  }
+}
+
+function groundRandomSquare(machine) {
+  const product = BigInt(machine.A >>> 0) * BigInt(machine.A >>> 0);
+  machine.A = Number(product & 0xffffffffn) | 0;
+  machine.D = Number((product >> 32n) & 0xffffffffn) | 0;
+}
+
+function groundTileShade(machine, linked) {
+  const memory = machine.memory;
+  let seed = ((value(memory, linked, "VHGNDh1") + value(memory, linked, "VHGNDseed")) | 3) | 0;
+  memory[address(linked, "SUfseed")] = seed;
+  const product = BigInt(seed >>> 0) * BigInt(seed >>> 0);
+  const low = Number(product & 0xffffffffn) | 0;
+  const high = Number((product >> 32n) & 0xffffffffn) | 0;
+  const folded = (low & 0xffffff00) | (((low & 0xff) + (high & 0xff)) & 0xff);
+  memory[address(linked, "SUfeax")] = folded;
+  seed = (seed + folded) | 0;
+  memory[address(linked, "SUfseed")] = seed;
+  memory[address(linked, "SUfmask")] = 7;
+  const result = folded & 7;
+  memory[address(linked, "SUfval")] = result;
+  machine.A = result;
+  machine.B = seed;
+  machine.C = result;
+  machine.D = high;
+}
+
+function loadProjectedVertices(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const vertices = value(memory, linked, "PJnrv") | 0;
+  for (let unit = 0; unit < vertices * 2; unit += 1) {
+    memory[floats + 96 + unit] = memory[floats + 64 + unit];
+    memory[floats + 112 + unit] = memory[floats + 72 + unit];
+    memory[floats + 128 + unit] = memory[floats + 80 + unit];
+  }
+  memory[address(linked, "PJvr")] = vertices;
+  memory[address(linked, "PJvr2")] = vertices;
+  memory[address(linked, "PJvr22")] = vertices * 2;
+}
+
+function duplicateMappedInput(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  for (const source of [508, 516, 524]) {
+    memory[floats + source + 2] = memory[floats + source];
+    memory[floats + source + 3] = memory[floats + source + 1];
+  }
+}
+
+function duplicateMappedRotation(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  for (const source of [68, 76, 84]) {
+    memory[floats + source + 2] = memory[floats + source];
+    memory[floats + source + 3] = memory[floats + source + 1];
+  }
+  const visibility = value(memory, linked, "PJrwfbase") >>> 0;
+  const flag = memory[visibility + 2] | 0;
+  memory[visibility + 3] = flag;
+  const doFlag = address(linked, "PJdoflag");
+  memory[doFlag] = (memory[doFlag] + flag) | 0;
+}
+
+function enterFloatingPoint(machine, linked) {
+  const fpu = floatingPoint(machine);
+  machine.memory[address(linked, "FCWSAV")] = (fpu.control | 0x40) & 0xffff;
+  fpu.control = value(machine.memory, linked, "FCW") & 0xffff;
+}
+
+function leaveFloatingPoint(machine, linked) {
+  floatingPoint(machine).control = value(machine.memory, linked, "FCWSAV") & 0xffff;
+}
+
+function loadFloatingPointControl(machine, linked) {
+  floatingPoint(machine).control = value(machine.memory, linked, "FCW") & 0xffff;
+}
+
+function readFloatingPointControl(machine, linked) {
+  const fpu = floatingPoint(machine);
+  machine.memory[address(linked, "FCWTMP")] = (fpu.control | 0x40) & 0xffff;
+}
+
+function readFloatingPointStatus(machine, linked) {
+  const fpu = floatingPoint(machine);
+  machine.memory[address(linked, "FSW")] = fpu.status & 0xffff;
+}
+
+function saveChopControl(machine, linked) {
+  const control = floatingPoint(machine).control;
+  machine.memory[address(linked, "FCWCSAV")] = (control | 0x40) & 0xffff;
+}
+
+function convertFloatToIntChop(machine, linked) {
+  const memory = machine.memory;
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "FCWCHOP") & 0xffff;
+  memory[address(linked, "FI")] = convertToInt32(readFloat64(memory, address(linked, "FA0")), fpu.control);
+  fpu.control = value(memory, linked, "FCWCSAV") & 0xffff;
+}
+
+function convertFloatToIntNear(machine, linked) {
+  const memory = machine.memory;
+  memory[address(linked, "FI")] = convertToInt32(
+    readFloat64(memory, address(linked, "FA0")),
+    floatingPoint(machine).control,
+  );
+}
+
+function convertIntToFloat(machine, linked) {
+  const memory = machine.memory;
+  writeFloat64(memory, address(linked, "FA0"), value(memory, linked, "FI"));
+}
+
+function narrowFloat32(machine, linked) {
+  const memory = machine.memory;
+  const narrowed = roundFloat32(
+    readFloat64(memory, address(linked, "FA0")),
+    floatingPoint(machine).control,
+  );
+  memory[address(linked, "FS0")] = float32Bits(narrowed);
+  writeFloat64(memory, address(linked, "FA0"), narrowed);
+}
+
+function storeFloat32(machine, linked) {
+  const memory = machine.memory;
+  const narrowed = roundFloat32(
+    readFloat64(memory, address(linked, "FA0")),
+    floatingPoint(machine).control,
+  );
+  memory[address(linked, "FS0")] = float32Bits(narrowed);
+}
+
+function loadFloat32(machine, linked) {
+  const memory = machine.memory;
+  writeFloat64(memory, address(linked, "FA0"), float32FromBits(value(memory, linked, "FS0")));
 }
 
 export const NOCTIS_INTRINSIC_IDS = IDS;
@@ -547,6 +866,28 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.transparentCullPixel]: transparentCullPixel,
     [IDS.duplicateHalfScan]: duplicateHalfScan,
     [IDS.resetFloatingPoint]: resetFloatingPoint,
+    [IDS.invertGroundSky]: invertGroundSky,
+    [IDS.clearGroundPage]: clearGroundPage,
+    [IDS.copyGroundBackground]: copyGroundBackground,
+    [IDS.drawGroundBackground]: drawGroundBackground,
+    [IDS.groundCachedBounds]: groundCachedBounds,
+    [IDS.groundRandomSquare]: groundRandomSquare,
+    [IDS.groundTileShade]: groundTileShade,
+    [IDS.loadProjectedVertices]: loadProjectedVertices,
+    [IDS.duplicateMappedInput]: duplicateMappedInput,
+    [IDS.duplicateMappedRotation]: duplicateMappedRotation,
+    [IDS.enterFloatingPoint]: enterFloatingPoint,
+    [IDS.leaveFloatingPoint]: leaveFloatingPoint,
+    [IDS.loadFloatingPointControl]: loadFloatingPointControl,
+    [IDS.readFloatingPointControl]: readFloatingPointControl,
+    [IDS.readFloatingPointStatus]: readFloatingPointStatus,
+    [IDS.saveChopControl]: saveChopControl,
+    [IDS.convertFloatToIntChop]: convertFloatToIntChop,
+    [IDS.convertFloatToIntNear]: convertFloatToIntNear,
+    [IDS.convertIntToFloat]: convertIntToFloat,
+    [IDS.narrowFloat32]: narrowFloat32,
+    [IDS.storeFloat32]: storeFloat32,
+    [IDS.loadFloat32]: loadFloat32,
     ...overrides,
   };
 }

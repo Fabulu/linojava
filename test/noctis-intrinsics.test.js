@@ -17,6 +17,15 @@ function fixture() {
     "EWminy", "EWmaxy", "PGfpartbase", "PGipartbase", "PGi", "PGnwbase",
     "RPBG", "SPdi", "SPax", "SPdx", "SPcl", "SPbp", "SPsi", "PGtexoff",
     "SPtinta", "SPn", "FCW",
+    "VHGNDbgsourcenative", "VHGNDpageclearptr", "VHGNDbgcachefrom",
+    "VHGNDbgcacheto", "VHGNDbgcachecount", "VHGNDbgoffnative",
+    "VHGNDbgdestinationnative", "BGbp", "BGcxr", "BGdx", "BGw", "BGdi",
+    "BGpx", "BGi", "VHGNDbgrowbase", "VHGNDmpbase", "PJminx", "PJmaxx",
+    "BXminy", "BXmaxy", "VHGNDh1", "VHGNDseed", "SUfseed", "SUfeax",
+    "SUfmask", "SUfval",
+    "PJfwbase", "PJnrv", "PJvr", "PJvr2", "PJvr22", "PJrwfbase",
+    "PJdoflag", "FCWSAV", "FCWTMP", "FSW", "FCWCSAV", "FCWCHOP",
+    "FI", "FA0", "FS0",
   ];
   const symbols = new Map(names.map((name, index) => [
     canonicalName(name),
@@ -242,5 +251,145 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
 
   memory[at("FCW")] = 0x137f;
   run(IDS.resetFloatingPoint);
-  assert.deepEqual(machine.fpu, { control: 0x137f, stack: [] });
+  assert.deepEqual(machine.fpu, { control: 0x137f, status: 0, stack: [] });
+
+  memory[at("VHGNDbgsourcenative")] = 1_520_000;
+  memory[1_520_000] = 9;
+  memory[1_520_001] = 10;
+  memory[1_520_000 + 40_000] = 20;
+  run(IDS.invertGroundSky);
+  assert.equal(memory[1_520_000], 9);
+  assert.equal(memory[1_520_001], 53);
+  assert.equal(memory[1_520_000 + 40_000], 43);
+
+  memory[at("VHGNDpageclearptr")] = 1_570_000;
+  memory.fill(99, 1_570_000, 1_570_000 + 64_000);
+  run(IDS.clearGroundPage);
+  assert.equal(memory[1_570_000], 0);
+  assert.equal(memory[1_570_000 + 63_999], 0);
+
+  memory[at("VHGNDbgcachefrom")] = 1_650_000;
+  memory[at("VHGNDbgcacheto")] = 1_650_010;
+  memory[at("VHGNDbgcachecount")] = 3;
+  memory.set([21, 22, 23], 1_650_000);
+  run(IDS.copyGroundBackground);
+  assert.deepEqual([...memory.slice(1_650_010, 1_650_013)], [21, 22, 23]);
+
+  memory[at("VHGNDbgoffnative")] = 1_660_000;
+  memory[at("VHGNDbgsourcenative")] = 1_661_000;
+  memory[at("VHGNDbgdestinationnative")] = 1_662_000;
+  memory.set([10, 0, 2, 250], 1_660_000);
+  memory[1_661_005] = 7;
+  memory[at("BGbp")] = 5;
+  memory[at("BGcxr")] = 2;
+  memory[at("BGdx")] = 4;
+  run(IDS.drawGroundBackground);
+  assert.deepEqual([...memory.slice(1_662_014, 1_662_019)], [7, 7, 7, 7, 7]);
+  assert.deepEqual([...memory.slice(1_662_334, 1_662_339)], [7, 7, 7, 7, 7]);
+  assert.equal(memory[at("BGbp")], 8);
+  assert.equal(memory[at("BGcxr")], 0);
+
+  memory[at("VHGNDmpbase")] = 1_680_000;
+  memory.set([20, 40, 10, 60, 30, 20, 20, 40], 1_680_000);
+  run(IDS.groundCachedBounds);
+  assert.deepEqual(
+    [memory[at("PJminx")], memory[at("PJmaxx")], memory[at("BXminy")], memory[at("BXmaxy")]],
+    [10, 30, 20, 60],
+  );
+
+  machine.A = -1;
+  run(IDS.groundRandomSquare);
+  assert.equal(machine.A, 1);
+  assert.equal(machine.D, -2);
+
+  memory[at("VHGNDh1")] = 123;
+  memory[at("VHGNDseed")] = 456;
+  run(IDS.groundTileShade);
+  const tileSeed = (123 + 456) | 3;
+  const tileProduct = BigInt(tileSeed >>> 0) * BigInt(tileSeed >>> 0);
+  const tileLow = Number(tileProduct & 0xffffffffn) | 0;
+  const tileHigh = Number((tileProduct >> 32n) & 0xffffffffn) | 0;
+  const tileFolded = (tileLow & 0xffffff00) | (((tileLow & 0xff) + (tileHigh & 0xff)) & 0xff);
+  assert.equal(memory[at("SUfeax")], tileFolded);
+  assert.equal(memory[at("SUfseed")], (tileSeed + tileFolded) | 0);
+  assert.equal(memory[at("SUfval")], tileFolded & 7);
+
+  memory[at("PJfwbase")] = 1_700_000;
+  memory[at("PJnrv")] = 2;
+  memory.set([1, 2, 3, 4], 1_700_064);
+  memory.set([5, 6, 7, 8], 1_700_072);
+  memory.set([9, 10, 11, 12], 1_700_080);
+  run(IDS.loadProjectedVertices);
+  assert.deepEqual([...memory.slice(1_700_096, 1_700_100)], [1, 2, 3, 4]);
+  assert.deepEqual([...memory.slice(1_700_112, 1_700_116)], [5, 6, 7, 8]);
+  assert.deepEqual([...memory.slice(1_700_128, 1_700_132)], [9, 10, 11, 12]);
+  assert.deepEqual(
+    [memory[at("PJvr")], memory[at("PJvr2")], memory[at("PJvr22")]],
+    [2, 2, 4],
+  );
+
+  memory.set([101, 102], 1_700_508);
+  memory.set([103, 104], 1_700_516);
+  memory.set([105, 106], 1_700_524);
+  run(IDS.duplicateMappedInput);
+  assert.deepEqual([...memory.slice(1_700_510, 1_700_512)], [101, 102]);
+  assert.deepEqual([...memory.slice(1_700_518, 1_700_520)], [103, 104]);
+  assert.deepEqual([...memory.slice(1_700_526, 1_700_528)], [105, 106]);
+
+  memory.set([201, 202], 1_700_068);
+  memory.set([203, 204], 1_700_076);
+  memory.set([205, 206], 1_700_084);
+  memory[at("PJrwfbase")] = 1_701_000;
+  memory[1_701_002] = 1;
+  memory[at("PJdoflag")] = 2;
+  run(IDS.duplicateMappedRotation);
+  assert.deepEqual([...memory.slice(1_700_070, 1_700_072)], [201, 202]);
+  assert.equal(memory[1_701_003], 1);
+  assert.equal(memory[at("PJdoflag")], 3);
+
+  memory[at("FCW")] = 0x103f;
+  machine.fpu.control = 0x0f7f;
+  run(IDS.enterFloatingPoint);
+  assert.equal(memory[at("FCWSAV")], 0x0f7f);
+  assert.equal(machine.fpu.control, 0x103f);
+  run(IDS.leaveFloatingPoint);
+  assert.equal(machine.fpu.control, 0x0f7f);
+  run(IDS.loadFloatingPointControl);
+  assert.equal(machine.fpu.control, 0x103f);
+  run(IDS.readFloatingPointControl);
+  assert.equal(memory[at("FCWTMP")], 0x107f);
+  machine.fpu.status = 0x2800;
+  run(IDS.readFloatingPointStatus);
+  assert.equal(memory[at("FSW")], 0x2800);
+
+  linked.symbols.get(canonicalName("FA0")).value = 1_800_000;
+  linked.symbols.get(canonicalName("FS0")).value = 1_800_002;
+  linked.symbols.get(canonicalName("FI")).value = 1_800_003;
+  const view = new DataView(memory.buffer);
+  memory[at("FI")] = -123;
+  run(IDS.convertIntToFloat);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), -123);
+
+  view.setFloat64(at("FA0") * 4, 1.5, true);
+  machine.fpu.control = 0x103f;
+  run(IDS.convertFloatToIntNear);
+  assert.equal(memory[at("FI")], 2);
+  run(IDS.saveChopControl);
+  assert.equal(memory[at("FCWCSAV")], 0x107f);
+  memory[at("FCWCHOP")] = 0x1c3f;
+  view.setFloat64(at("FA0") * 4, -1.9, true);
+  run(IDS.convertFloatToIntChop);
+  assert.equal(memory[at("FI")], -1);
+  assert.equal(machine.fpu.control, 0x107f);
+
+  view.setFloat64(at("FA0") * 4, 1 + 2 ** -25, true);
+  machine.fpu.control = 0x103f;
+  run(IDS.narrowFloat32);
+  assert.equal(memory[at("FS0")] >>> 0, 0x3f800000);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 1);
+  view.setFloat64(at("FA0") * 4, -2.5, true);
+  run(IDS.storeFloat32);
+  view.setFloat64(at("FA0") * 4, 0, true);
+  run(IDS.loadFloat32);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), -2.5);
 });
