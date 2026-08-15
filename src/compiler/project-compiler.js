@@ -113,7 +113,7 @@ function returnInstruction(status, index) {
   return `${setStatus} if (d === 0) { pc = ${index}; halted = true; return save("halted", executed); } pc = (s[--d] | 0) - 1; continue runner;`;
 }
 
-function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceInlines = new Map(), count = "", profile = false) {
+function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceInlines = new Map(), count = "", profile = false, branchFallthrough = true) {
   const next = instruction.index + 1;
   const sampled = profile ? `prof[${instruction.index}]=(prof[${instruction.index}]+1)>>>0;` : "";
   count = `${sampled}${count}`;
@@ -147,9 +147,20 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceIn
       return `case ${instruction.index}: { ${count} ${code} }`;
     }
     case "jump": return `case ${instruction.index}: { ${count} pc = (${expression(instruction.target)}) - 1; continue runner; }`;
-    case "branch": return `case ${instruction.index}: { ${count} pc = ${predicate(instruction)} ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
-    case "branch-status": return `case ${instruction.index}: { ${count} pc = (X === ${instruction.status === "ok" ? DONE : FAIL}) ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
-    case "loop": code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`); return `case ${instruction.index}: { ${count} ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+    case "branch": {
+      if (!branchFallthrough) return `case ${instruction.index}: { ${count} pc = ${predicate(instruction)} ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+      return `case ${instruction.index}: { ${count} if (${predicate(instruction)}) { pc = ((${expression(instruction.target)}) - 1); continue runner; } pc = ${next}; }`;
+    }
+    case "branch-status": {
+      const status = instruction.status === "ok" ? DONE : FAIL;
+      if (!branchFallthrough) return `case ${instruction.index}: { ${count} pc = (X === ${status}) ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+      return `case ${instruction.index}: { ${count} if (X === ${status}) { pc = ((${expression(instruction.target)}) - 1); continue runner; } pc = ${next}; }`;
+    }
+    case "loop": {
+      code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`);
+      if (!branchFallthrough) return `case ${instruction.index}: { ${count} ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
+      return `case ${instruction.index}: { ${count} ${code} if ((${expression(instruction.counter)}) !== 0) { pc = ((${expression(instruction.target)}) - 1); continue runner; } pc = ${next}; }`;
+    }
     case "isocall": return `case ${instruction.index}: { ${count} pc = ${next}; sync(); const result = dispatch(machine); X = result?.status === ${FAIL} || result?.success === false ? ${FAIL} : ${DONE}; if (result?.yielded || result?.yield) return { ...save("yield", executed), sleepMilliseconds: Math.max(0, Number(result?.sleepMilliseconds ?? result?.delay ?? 0) || 0) }; }`;
     case "intrinsic": return `case ${instruction.index}: { ${count} pc=${instruction.index}; sync(); native(${JSON.stringify(instruction.intrinsicId)}, machine); m=machine.memory; md=new DataView(m.buffer,m.byteOffset,m.byteLength); s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
     case "end": return `case ${instruction.index}: { ${count} ${returnInstruction(DONE, instruction.index)} }`;
@@ -203,7 +214,7 @@ export function emitRunner(linked, options = {}) {
     : budgetCounts(linked, instructions, serviceIntrinsicIds);
   const cases = instructions.map((instruction) => emitInstruction(
     instruction, serviceIntrinsicIds, serviceInlines, counts.get(instruction.index) ?? "",
-    options.profileInstructions === true,
+    options.profileInstructions === true, options.branchFallthrough !== false,
   )).join("\n");
   const defaultCase = options.transfer
     ? 'default: return save("transfer", executed);'
@@ -264,6 +275,7 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     runners.push(new Function("dispatch", "native", emitRunner(linked, {
       instructions, serviceIntrinsicIds, serviceInlines,
       batchBudgets: options.batchBudgets, profileInstructions: options.profileInstructions,
+      branchFallthrough: options.branchFallthrough,
       transfer: true,
     }))(dispatch, native));
   }
