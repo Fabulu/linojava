@@ -243,12 +243,14 @@ const SERVICE_IDS = Object.freeze({
   project3d: "service:pjproject3dservice",
   drawPolygon: "service:pgdrawb",
   poly3d: "service:pgpoly3d",
+  polymap: "service:pgpolymap",
 });
 
 const symbolCaches = new WeakMap();
 const dataViewCaches = new WeakMap();
 const rasterAddressCaches = new WeakMap();
 const poly3dAddressCaches = new WeakMap();
+const polymapAddressCaches = new WeakMap();
 const float32Scratch = new DataView(new ArrayBuffer(4));
 
 function address(linked, name) {
@@ -2370,6 +2372,206 @@ function poly3d(machine, linked) {
   drawPolygon(machine, linked);
 }
 
+function polymapAddresses(linked) {
+  let cached = polymapAddressCaches.get(linked);
+  if (cached) return cached;
+  const names = [
+    "PJpreproject", "PJminx", "PJmaxx", "SPterrain", "SPmapfast", "SPpixfast",
+    "SPtrifast", "SPcull", "SPhalf", "SPflar", "SPtinta", "SPescr", "SPsrc",
+    "SPi", "SPsec", "SPdi", "SPcl", "SPu", "SPv", "SPun", "SPvn", "SPax",
+    "SPdx", "SPbp", "SPsi", "SPch", "SPbx", "SPt", "SPn", "SPsave",
+    "PGfwbase", "PGnwbase", "PGfpartbase", "PGipartbase", "PGtexf", "PGtexoff",
+    "PGtexi", "PGtexv", "PGtmp", "PGdi", "PGval", "PGi", "PGj", "CSpix",
+    "EWvr22", "EWminy", "EWmaxy", "EWsi", "EWx1", "EWy1", "EWx2", "EWy2",
+    "EWity", "EWjty", "EWax", "EWcx", "EWh", "FS16", "FSVX", "FSVY",
+    "FSVZ", "FSK1", "FSK2", "FSK3", "D64THLO", "D64THHI", "D64QLO",
+    "D64QHI", "PJthird0", "PJthird1", "ipart", "fpart", "nw", "SADPT",
+    "RPSM", "RPBG", "RNGLB", "PGSCRT", "PGSCRE", "PGDOFF",
+  ];
+  cached = {
+    ...poly3dAddresses(linked),
+    ...Object.fromEntries(names.map((name) => [name, address(linked, name)])),
+  };
+  cached.page = (cached.nw + cached.SADPT) >>> 0;
+  polymapAddressCaches.set(linked, cached);
+  return cached;
+}
+
+const POLYGON_GRADIENTS = Object.freeze([
+  [0xeb, 0xe7, 0xed, 0xe5, 0xf6, 0],
+  [0xeb, 0xea, 0xed, 0xe8, 0xf6, 1],
+  [0xe8, 0xe7, 0xea, 0xe5, 0x1a, 2],
+  [0xed, 0xe6, 0xec, 0xe7, 0xf5, 3],
+  [0xed, 0xe9, 0xec, 0xea, 0xf5, 4],
+  [0xea, 0xe6, 0xe9, 0xe7, 0x1a, 5],
+  [0xec, 0xe5, 0xeb, 0xe6, 0xf4, 6],
+  [0xec, 0xe8, 0xeb, 0xe9, 0xf4, 7],
+  [0xe9, 0xe5, 0xe8, 0xe6, 0x12, 8],
+]);
+
+function prepareMappedVectors(machine, linked, p, vertices, fast) {
+  const memory = machine.memory;
+  memory[p.PJdx] = vertices;
+  if (vertices === 3) {
+    memory[p.PJthird0] = p.D64THLO;
+    memory[p.PJthird1] = p.D64THHI;
+  } else {
+    memory[p.PJthird0] = p.D64QLO;
+    memory[p.PJthird1] = p.D64QHI;
+  }
+  polygonMidpoint(machine, linked, vertices);
+  memory[p.PJvr] = 0;
+  transformMappedVertices(machine, linked);
+  memory[p.PJvv] = vertices - 1;
+  preparePolygonVectors(machine, linked, vertices - 1);
+  if (fast) polygonGradients(machine, linked);
+  else {
+    for (const record of POLYGON_GRADIENTS) {
+      [memory[p.CLxi], memory[p.CLyi], memory[p.CLxo], memory[p.CLyo],
+        memory[p.CLbnd], memory[p.CLt]] = record;
+      polygonGradient(machine, linked, ...record);
+    }
+  }
+}
+
+function prepareMappedBlockSteps(machine, linked, p) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  for (const [source, destination] of [
+    [p.FSVX, p.FSK1], [p.FSVY, p.FSK2], [p.FSVZ, p.FSK3],
+  ]) {
+    let result = scalarBinaryNumber(
+      readFloat64(memory, p.fw + source * 2),
+      readFloat64(memory, p.fw + p.FS16 * 2),
+      control,
+      "multiply",
+    );
+    writeScalarScratch(machine, linked, result);
+    result = narrowScalar(machine, linked, result);
+    writeFloat64(memory, p.fw + destination * 2, result);
+  }
+  if ((memory[p.SPcull] | 0) !== 0) {
+    for (const slot of [p.FSK1, p.FSK2, p.FSK3]) {
+      const input = readFloat64(memory, p.fw + slot * 2);
+      let result = scalarBinaryNumber(input, input, control, "add");
+      writeScalarScratch(machine, linked, result);
+      result = narrowScalar(machine, linked, result);
+      writeFloat64(memory, p.fw + slot * 2, result);
+    }
+  }
+}
+
+function drawConstantMergerPolygon(machine, linked, p) {
+  const memory = machine.memory;
+  memory[p.EWvr22] = memory[p.PJvr22];
+  memory[p.EWminy] = memory[p.BXminy];
+  memory[p.EWmaxy] = memory[p.BXmaxy];
+  memory[p.PGfwbase] = p.fw;
+  memory[p.PGfpartbase] = p.fpart;
+  memory[p.PGipartbase] = p.ipart;
+  initializePolygonRows(machine, linked);
+  polygonEdges(machine, linked);
+  memory[p.SPsrc] = 1;
+  mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, memory[p.SPtinta]);
+  mappedPageStore(memory, p, (p.PGSCRE + p.PGDOFF) & 0xffff, memory[p.SPescr]);
+  const maximum = memory[p.BXmaxy] | 0;
+  let row = memory[p.BXminy] | 0;
+  for (; row <= maximum; row += 1) {
+    memory[p.SPi] = row;
+    const first = memory[p.ipart + row] | 0;
+    const count = ((memory[p.fpart + row] | 0) - first) | 0;
+    memory[p.SPsec] = count > 0 ? count % 16 === 0 ? 0 : (count % 16) - 16 : count;
+    let di = (Math.imul(row, 320) + first) & 0xffff;
+    memory[p.SPdi] = di;
+    for (let pixel = 0; pixel < count; pixel += 1) {
+      const destination = (di + 4) & 0xffff;
+      const old = memory[p.page + destination] & 0xff;
+      const output = (old & 192) | ((old & 63) >>> 1);
+      di = (di + 1) & 0xffff;
+      memory[p.SPdi] = di;
+      memory[p.SPch] = output;
+      mappedPageStore(memory, p, (di + 3) & 0xffff, output);
+    }
+    if (count > 0) memory[p.CSpix] = (memory[p.CSpix] + count) | 0;
+  }
+  memory[p.SPi] = row;
+}
+
+function polymap(machine, linked) {
+  const memory = machine.memory;
+  const p = polymapAddresses(linked);
+  memory[p.PJgate] = 0;
+  let originalVertices = memory[p.PJnrv] | 0;
+  if (originalVertices === 3) {
+    polyMove(machine, linked, p, p.FSINX + 2, p.FSINX + 3);
+    polyMove(machine, linked, p, p.FSINY + 2, p.FSINY + 3);
+    polyMove(machine, linked, p, p.FSINZ + 2, p.FSINZ + 3);
+  }
+  memory[p.PJmode] = 1;
+  memory[p.PJdx] = originalVertices;
+  if ((memory[p.PJpreproject] | 0) === 0) {
+    if (originalVertices === 3) {
+      memory[p.PJnrv] = 3;
+      polyRotate(machine, linked, p);
+      polyMove(machine, linked, p, p.FSRXF + 2, p.FSRXF + 3);
+      polyMove(machine, linked, p, p.FSRYF + 2, p.FSRYF + 3);
+      polyMove(machine, linked, p, p.FSRZF + 2, p.FSRZF + 3);
+      const flag = memory[p.rwf + 2] | 0;
+      memory[p.rwf + 3] = flag;
+      memory[p.PJdoflag] = (memory[p.PJdoflag] + flag) | 0;
+    } else {
+      memory[p.PJnrv] = 4;
+      polyRotate(machine, linked, p);
+    }
+  }
+  memory[p.PJvr] = 4;
+  memory[p.PJnrv] = 4;
+  memory[p.PJgate] = 1;
+  if ((memory[p.PJdoflag] | 0) === 0) return;
+  if ((memory[p.PJdoflag] | 0) === 4) polyZload(machine, linked, p);
+  else {
+    polyZclip(machine, linked, p);
+    memory[p.PJgate] = 2;
+    if ((memory[p.PJvr2] | 0) < 3) return;
+  }
+  if ((memory[p.PJpreproject] | 0) === 0) projectMappedPolygon(machine, linked);
+  memory[p.PJpreproject] = 0;
+  memory[p.PJgate] = 7;
+  if ((memory[p.PJminx] | 0) > p.PGUBX || (memory[p.PJmaxx] | 0) < p.PGLBX
+    || (memory[p.BXminy] | 0) > p.PGUBY || (memory[p.BXmaxy] | 0) < p.PGLBY) return;
+  if ((memory[p.BXminy] | 0) < p.PGLBY) memory[p.BXminy] = p.PGLBY;
+  if ((memory[p.BXmaxy] | 0) > p.PGUBY) memory[p.BXmaxy] = p.PGUBY;
+  memory[p.PJgate] = 8;
+  if ((memory[p.BXminy] | 0) > (memory[p.BXmaxy] | 0)) return;
+
+  if ((memory[p.PGtexf] | 0) === 7 && (memory[p.SPflar] & 15) === 4
+    && (memory[p.SPtinta] | 0) === 0 && (memory[p.SPcull] | 0) === 0
+    && (memory[p.SPhalf] | 0) === 0) {
+    drawConstantMergerPolygon(machine, linked, p);
+    memory[p.PJgate] = 0;
+    return;
+  }
+
+  originalVertices = memory[p.PJdx] | 0;
+  memory[p.PJnrv] = originalVertices;
+  const fastVectors = (memory[p.SPterrain] | memory[p.SPtrifast] | memory[p.SPmapfast]) !== 0;
+  prepareMappedVectors(machine, linked, p, originalVertices, fastVectors);
+  memory[p.PJnrv] = 4;
+  prepareMappedBlockSteps(machine, linked, p);
+
+  memory[p.EWvr22] = memory[p.PJvr22];
+  memory[p.EWminy] = memory[p.BXminy];
+  memory[p.EWmaxy] = memory[p.BXmaxy];
+  memory[p.PGfwbase] = p.fw;
+  memory[p.PGfpartbase] = p.fpart;
+  memory[p.PGipartbase] = p.ipart;
+  initializePolygonRows(machine, linked);
+  polygonEdges(machine, linked);
+  memory[p.SPsrc] = 1;
+  mappedTrace(machine, linked, p);
+  memory[p.PJgate] = 0;
+}
+
 function initializePolygonRows(machine, linked) {
   const memory = machine.memory;
   let row = value(memory, linked, "EWminy") | 0;
@@ -3319,6 +3521,273 @@ function terrainUvNext(machine, linked) {
   };
   project(x, 32, "SPun");
   project(y, 34, "SPvn");
+}
+
+function mappedTextureByte(machine, linked, p, u, v, publish = true) {
+  const memory = machine.memory;
+  const index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+  const formula = memory[p.PGtexf] | 0;
+  let pixel;
+  switch (formula) {
+    case 1: pixel = ((index >>> 8) ^ (index & 0xff)) & 0xff; break;
+    case 2: pixel = 1; break;
+    case 3: pixel = index === 0 || index === 32768 || index === 65535 ? 255 : 0; break;
+    case 4:
+      pixel = memory[p.nw + p.RPSM + (memory[p.PGtexoff] | 0) + index] & 0xff;
+      break;
+    case 5:
+      pixel = memory[p.nw + p.RPBG + (memory[p.PGtexoff] | 0) + index] & 0xff;
+      break;
+    case 6: pixel = memory[p.nw + p.RNGLB + index] & 0xff; break;
+    case 7: pixel = 0; break;
+    default: pixel = (Math.imul(index, 37) + 11) & 0xff; break;
+  }
+  if (publish) {
+    memory[p.PGtexi] = index;
+    memory[p.PGtmp] = index;
+    memory[p.PGtexv] = pixel;
+  }
+  return pixel;
+}
+
+function mappedPageLoad(memory, p, offset) {
+  offset &= 0xffff;
+  memory[p.PGdi] = offset;
+  const pixel = memory[p.page + offset] & 0xff;
+  memory[p.PGval] = pixel;
+  return pixel;
+}
+
+function mappedPageStore(memory, p, offset, pixel) {
+  offset &= 0xffff;
+  pixel &= 0xff;
+  memory[p.PGdi] = offset;
+  memory[p.PGval] = pixel;
+  memory[p.page + offset] = pixel;
+}
+
+function mappedPixelLoop(machine, linked, p, count, culling, fast) {
+  const memory = machine.memory;
+  let di = memory[p.SPdi] & 0xffff;
+  let u = memory[p.SPax] & 0xffff;
+  let v = memory[p.SPdx] & 0xffff;
+  const du = memory[p.SPbp] | 0;
+  const dv = memory[p.SPsi] | 0;
+  const flare = memory[p.SPflar] & 15;
+  const mode = flare === 0 ? 0 : (flare & 1) !== 0 ? 1
+    : (flare & 2) !== 0 ? 2 : (flare & 4) !== 0 ? 4 : 8;
+  const step = culling ? 2 : 1;
+  const scratchTint = (p.PGSCRT + p.PGDOFF) & 0xffff;
+  const scratchEsc = (p.PGSCRE + p.PGDOFF) & 0xffff;
+  const censusPerPixel = culling ? 2 : 1;
+  for (let pixelIndex = 0; pixelIndex < count; pixelIndex += 1) {
+    if (fast) {
+      di = (di + step) & 0xffff;
+      const destination = (di + (culling ? 2 : 3)) & 0xffff;
+      const texture = mappedTextureByte(machine, linked, p, u, v, false);
+      const pixel = mode === 1
+        ? ((memory[p.page + ((di + 3) & 0xffff)] & 0xff) + texture) & 0xff
+        : (texture + (memory[p.SPtinta] | 0)) & 0xff;
+      u = (u + du) & 0xffff;
+      memory[p.page + destination] = pixel;
+      if (culling) memory[p.page + ((di + 3) & 0xffff)] = pixel;
+      v = (v + dv) & 0xffff;
+      continue;
+    }
+
+    let output;
+    let texture;
+    let destination;
+    if (mode === 2 || mode === 4) {
+      output = mappedPageLoad(memory, p, (di + 4) & 0xffff) & 63;
+      memory[p.SPch] = output;
+    }
+    di = (di + step) & 0xffff;
+    memory[p.SPdi] = di;
+    if (mode === 0) {
+      output = mappedPageLoad(memory, p, scratchTint);
+      memory[p.SPch] = output;
+    } else if (mode === 1) {
+      output = mappedPageLoad(memory, p, (di + 3) & 0xffff);
+      memory[p.SPch] = output;
+    }
+    texture = mappedTextureByte(machine, linked, p, u, v, true);
+    if (mode === 8) memory[p.SPbx] = texture;
+    output = ((memory[p.SPch] | 0) + texture) & 0xff;
+    memory[p.SPch] = output;
+
+    u = (u + du) & 0xffff;
+    memory[p.SPax] = u;
+    if (mode !== 8) {
+      v = (v + dv) & 0xffff;
+      memory[p.SPdx] = v;
+    }
+    if (mode === 2) {
+      if ((output >>> 0) > 62) output = 62;
+      memory[p.SPch] = output;
+      destination = (di + (culling ? 2 : 3)) & 0xffff;
+      memory[p.SPt] = destination;
+      output = (mappedPageLoad(memory, p, destination) & 192) | output;
+      output &= 0xff;
+      memory[p.SPch] = output;
+      mappedPageStore(memory, p, destination, output);
+      memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      if (culling) {
+        mappedPageStore(memory, p, (di + 3) & 0xffff, output);
+        memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      }
+    } else if (mode === 4) {
+      output = (output + mappedPageLoad(memory, p, scratchTint)) & 0xff;
+      memory[p.SPch] = output;
+      output >>>= 1;
+      memory[p.SPch] = output;
+      destination = (di + (culling ? 2 : 3)) & 0xffff;
+      memory[p.SPt] = destination;
+      output = ((mappedPageLoad(memory, p, destination) & 192) | output) & 0xff;
+      memory[p.SPch] = output;
+      mappedPageStore(memory, p, destination, output);
+      memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      if (culling) {
+        mappedPageStore(memory, p, (di + 3) & 0xffff, output);
+        memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      }
+    } else {
+      destination = (di + (culling ? 2 : 3)) & 0xffff;
+      mappedPageStore(memory, p, destination, output);
+      memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      if (culling) {
+        mappedPageStore(memory, p, (di + 3) & 0xffff, output);
+        memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      }
+      if (mode === 8) {
+        memory[p.SPsave] = di;
+        let bump = output & 7;
+        memory[p.SPn] = culling ? bump + 1 : bump;
+        memory[p.SPt] = bump + 1;
+        for (let index = 0; index < bump + 1; index += 1) di = (di - 320) & 0xffff;
+        memory[p.SPdi] = di;
+        output = ((memory[p.SPch] | 0) - mappedPageLoad(memory, p, scratchTint)) & 0xff;
+        output = (output + mappedPageLoad(memory, p, scratchEsc)) & 0xff;
+        output = (output + (memory[p.SPbx] | 0)) & 0xff;
+        memory[p.SPch] = output;
+        if (culling) {
+          mappedPageStore(memory, p, (di + 642) & 0xffff, output);
+          memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+          mappedPageStore(memory, p, (di + 643) & 0xffff, output);
+          memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+        } else {
+          mappedPageStore(memory, p, (di + 643) & 0xffff, output);
+          memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+        }
+        di = memory[p.SPsave] & 0xffff;
+        memory[p.SPdi] = di;
+        v = (v + dv) & 0xffff;
+        memory[p.SPdx] = v;
+      }
+    }
+    memory[p.SPcl] = (count - pixelIndex - 1) | 0;
+  }
+  memory[p.SPdi] = di;
+  memory[p.SPax] = u;
+  memory[p.SPdx] = v;
+  memory[p.SPcl] = 0;
+  if (!fast && count !== 0 && mode !== 8) {
+    memory[p.CSpix] = memory[p.CSpix] | 0;
+  }
+}
+
+function mappedScanline(machine, linked, p) {
+  const memory = machine.memory;
+  let remaining = memory[p.SPsec] | 0;
+  const culling = (memory[p.SPcull] & 1) !== 0;
+  const fast = (memory[p.SPterrain] | memory[p.SPpixfast]) !== 0;
+  const blockSize = culling ? 32 : 16;
+  while (remaining > 0) {
+    let count = remaining > blockSize ? blockSize
+      : culling ? (remaining + 2) & 0xff : remaining & 0xff;
+    remaining = (remaining - blockSize) | 0;
+    memory[p.SPsec] = remaining;
+    if (culling) {
+      if (count < 2) continue;
+      count >>>= 1;
+    } else if (count === 0) continue;
+    memory[p.SPcl] = count;
+    terrainUvNext(machine, linked);
+    memory[p.SPsi] = ((memory[p.SPvn] - memory[p.SPv]) >> 4) & 0xffff;
+    memory[p.SPbp] = ((memory[p.SPun] - memory[p.SPu]) >> 4) & 0xffff;
+    memory[p.SPax] = memory[p.SPu] & 0xffff;
+    memory[p.SPdx] = memory[p.SPv] & 0xffff;
+    memory[p.SPu] = memory[p.SPun];
+    memory[p.SPv] = memory[p.SPvn];
+    const start = memory[p.SPdi] & 0xffff;
+    if (culling) memory[p.SPsave] = start;
+    mappedPixelLoop(machine, linked, p, count, culling, fast);
+    if (culling) memory[p.SPdi] = (start + 32) & 0xffff;
+  }
+}
+
+function mappedHalfScan(machine, linked, p, fast) {
+  const memory = machine.memory;
+  const row = (memory[p.SPi] | 0) - 1;
+  const first = memory[p.ipart + row] | 0;
+  const last = memory[p.fpart + row] | 0;
+  memory[p.SPt] = first;
+  let count = (last - first) | 0;
+  if (count <= 0) return;
+  memory[p.SPn] = count;
+  let di = (Math.imul(memory[p.SPi] | 0, 320) + first) & 0xffff;
+  memory[p.SPdi] = di;
+  while (count !== 0) {
+    let pixel;
+    if (fast) pixel = memory[p.page + ((di - 316) & 0xffff)] & 0xff;
+    else {
+      pixel = mappedPageLoad(memory, p, (di - 316) & 0xffff);
+      memory[p.SPch] = pixel;
+    }
+    if (fast) {
+      memory[p.page + ((di + 4) & 0xffff)] = pixel;
+      memory[p.page + ((di + 324) & 0xffff)] = pixel;
+    } else {
+      mappedPageStore(memory, p, (di + 4) & 0xffff, pixel);
+      memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+      mappedPageStore(memory, p, (di + 324) & 0xffff, pixel);
+      memory[p.CSpix] = (memory[p.CSpix] + 1) | 0;
+    }
+    di = (di + 1) & 0xffff;
+    count -= 1;
+    memory[p.SPn] = count;
+  }
+  memory[p.SPdi] = di;
+}
+
+function mappedTrace(machine, linked, p) {
+  const memory = machine.memory;
+  mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, memory[p.SPtinta]);
+  mappedPageStore(memory, p, (p.PGSCRE + p.PGDOFF) & 0xffff, memory[p.SPescr]);
+  memory[p.PJfwbase] = p.fw;
+  memory[p.PJipartbase] = p.ipart;
+  memory[p.PGfwbase] = p.fw;
+  memory[p.PGnwbase] = p.nw;
+  let row = memory[p.BXminy] | 0;
+  const maximum = memory[p.BXmaxy] | 0;
+  const fastHalfScan = (memory[p.SPterrain] | memory[p.SPpixfast]) !== 0;
+  memory[p.SPi] = row;
+  while (row <= maximum) {
+    terrainTraceRow(machine, linked);
+    const first = memory[p.ipart + row] | 0;
+    const last = memory[p.fpart + row] | 0;
+    memory[p.SPsec] = (last - first) | 0;
+    memory[p.SPdi] = (Math.imul(row, 320) + first) & 0xffff;
+    mappedScanline(machine, linked, p);
+    if ((memory[p.SPhalf] & 1) !== 0) {
+      row += 1;
+      memory[p.SPi] = row;
+      if (row > maximum) break;
+      mappedHalfScan(machine, linked, p, fastHalfScan);
+    }
+    row += 1;
+    memory[p.SPi] = row;
+  }
 }
 
 function groundStoreFloat(machine, linked, destination, number) {
@@ -4997,6 +5466,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.project3d]: project3d,
     [SERVICE_IDS.drawPolygon]: drawPolygon,
     [SERVICE_IDS.poly3d]: poly3d,
+    [SERVICE_IDS.polymap]: polymap,
     [IDS.copyRegion]: copyRegion,
     [IDS.expandIndexed]: expandIndexed,
     [IDS.scale2x]: scale2x,
