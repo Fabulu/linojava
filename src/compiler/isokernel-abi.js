@@ -15,6 +15,12 @@ export const COMMANDS = Object.freeze({
   RETRACE: 1,
   SET_COOPERATIVE_MODE: 2,
   SET_EXCLUSIVE_MODE: 3,
+  GET_DATA_OFFSET: 4,
+  PLAY_ONCE: 5,
+  PLAY_CONTINUOUSLY: 6,
+  PAUSE: 7,
+  UNPAUSE: 8,
+  STOP: 9,
   GET_CONSOLE_INPUT: 10,
   CLEAR_CONSOLE_BUFFER: 11,
   READ_POINTER: 12,
@@ -33,6 +39,12 @@ export const IDLE = COMMANDS.IDLE;
 export const RETRACE = COMMANDS.RETRACE;
 export const SET_COOPERATIVE_MODE = COMMANDS.SET_COOPERATIVE_MODE;
 export const SET_EXCLUSIVE_MODE = COMMANDS.SET_EXCLUSIVE_MODE;
+export const GET_DATA_OFFSET = COMMANDS.GET_DATA_OFFSET;
+export const PLAY_ONCE = COMMANDS.PLAY_ONCE;
+export const PLAY_CONTINUOUSLY = COMMANDS.PLAY_CONTINUOUSLY;
+export const PAUSE = COMMANDS.PAUSE;
+export const UNPAUSE = COMMANDS.UNPAUSE;
+export const STOP = COMMANDS.STOP;
 export const GET_CONSOLE_INPUT = COMMANDS.GET_CONSOLE_INPUT;
 export const CLEAR_CONSOLE_BUFFER = COMMANDS.CLEAR_CONSOLE_BUFFER;
 export const TEST = COMMANDS.TEST;
@@ -255,6 +267,7 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
   let sleepMilliseconds = 0;
   const fileCommand = memory[at(OFFSETS.FileCommand)];
   const displayCommand = memory[at(OFFSETS.DisplayCommand)];
+  const pcmCommand = memory[at(OFFSETS.PCMdataCommand)];
   const consoleCommand = memory[at(OFFSETS.ConsoleCommand)];
   const pointerCommand = memory[at(OFFSETS.PointerCommand)];
   const timerCommand = memory[at(OFFSETS.SYStimeCommand)];
@@ -306,6 +319,26 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
         memory[at(OFFSETS.DisplayStatus)] &= ~ABI_CONSTANTS.exclusive;
         success = false;
       }
+    }
+    if (pcmCommand >= GET_DATA_OFFSET && pcmCommand <= STOP) {
+      const request = {
+        command: pcmCommand,
+        channels: memory[at(OFFSETS.PCMdataChannels)] | 0,
+        bitsPerSample: memory[at(OFFSETS.PCMdataBitsPerSample)] | 0,
+        samplesPerSecond: memory[at(OFFSETS.PCMdataSamplesPerSec)] | 0,
+        silenceThreshold: memory[at(OFFSETS.PCMdataSilenceThreshold)] | 0,
+        origin: memory[at(OFFSETS.PCMdataOrigin)] | 0,
+        offset: memory[at(OFFSETS.PCMdataOffset)] | 0,
+        size: memory[at(OFFSETS.PCMdataSize)] | 0,
+        memory,
+      };
+      const result = host.pcm?.(request);
+      const accepted = result === true || result?.success === true;
+      if (!accepted) success = false;
+      if (result?.offset !== undefined) memory[at(OFFSETS.PCMdataOffset)] = result.offset | 0;
+      if (result?.status !== undefined) memory[at(OFFSETS.PCMdataStatus)] = result.status | 0;
+      else if (accepted && pcmCommand === PAUSE) memory[at(OFFSETS.PCMdataStatus)] = ABI_CONSTANTS.pcmpaused;
+      else if (accepted) memory[at(OFFSETS.PCMdataStatus)] = ABI_CONSTANTS.pcmready;
     }
     if (consoleCommand === GET_CONSOLE_INPUT) {
       let input;

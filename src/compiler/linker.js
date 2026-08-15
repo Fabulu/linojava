@@ -88,6 +88,14 @@ export function linkProject(project, options = {}) {
   memory[kernelBase + OFFSETS.DisplayHeight] = height;
   memory[kernelBase + OFFSETS.DisplayPhysicalWidth] = options.physicalWidth ?? width;
   memory[kernelBase + OFFSETS.DisplayPhysicalHeight] = options.physicalHeight ?? height;
+  const modularExtensions = directors.get("modularextensions") ?? 0;
+  if (options.audioPlayback && (modularExtensions & ABI_CONSTANTS.audioplayback) !== 0) {
+    memory[kernelBase + OFFSETS.PCMdataStatus] = ABI_CONSTANTS.pcmready;
+    memory[kernelBase + OFFSETS.PCMdataChannels] = options.audioChannels ?? 2;
+    memory[kernelBase + OFFSETS.PCMdataBitsPerSample] = options.audioBitsPerSample ?? 16;
+    memory[kernelBase + OFFSETS.PCMdataSamplesPerSec] = options.audioSamplesPerSecond ?? 44100;
+    memory[kernelBase + OFFSETS.PCMdataSilenceThreshold] = options.audioSilenceThreshold ?? 0;
+  }
 
   const unresolved = [];
   for (const relocation of initialized.relocations) {

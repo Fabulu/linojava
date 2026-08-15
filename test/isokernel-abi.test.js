@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   KERNEL_UNITS, OFFSETS, COMMAND_OFFSETS, READ, GET_DIR, RETRACE,
   SET_COOPERATIVE_MODE, SET_EXCLUSIVE_MODE,
+  GET_DATA_OFFSET, PLAY_CONTINUOUSLY, PAUSE, STOP,
   GET_CONSOLE_INPUT, CLEAR_CONSOLE_BUFFER, KEY_OFFSETS,
   READ_POINTER, READ_TIME, READ_UTC_TIME, READ_COUNTS, SLEEP,
   K_READ, K_WRITE, K_DESTROY,
@@ -47,6 +48,32 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   memory[OFFSETS.DisplayCommand] = SET_EXCLUSIVE_MODE;
   assert.equal(dispatchIsoKernel(memory).failed, true);
   assert.equal(memory[OFFSETS.DisplayStatus], 2);
+
+  memory[OFFSETS.PCMdataChannels] = 2;
+  memory[OFFSETS.PCMdataBitsPerSample] = 16;
+  memory[OFFSETS.PCMdataSamplesPerSec] = 44100;
+  memory[OFFSETS.PCMdataOrigin] = 200;
+  memory[OFFSETS.PCMdataSize] = 20;
+  memory[OFFSETS.PCMdataCommand] = PLAY_CONTINUOUSLY;
+  let pcmRequest;
+  assert.equal(dispatchIsoKernel(memory, { pcm: (request) => {
+    pcmRequest = request;
+    return { success: true, status: 1, offset: 3 };
+  } }).success, true);
+  assert.deepEqual(
+    [pcmRequest.channels, pcmRequest.bitsPerSample, pcmRequest.samplesPerSecond, pcmRequest.origin, pcmRequest.size],
+    [2, 16, 44100, 200, 20],
+  );
+  assert.equal(memory[OFFSETS.PCMdataOffset], 3);
+  memory[OFFSETS.PCMdataCommand] = GET_DATA_OFFSET;
+  dispatchIsoKernel(memory, { pcm: () => ({ success: true, status: 1, offset: 11 }) });
+  assert.equal(memory[OFFSETS.PCMdataOffset], 11);
+  memory[OFFSETS.PCMdataCommand] = PAUSE;
+  dispatchIsoKernel(memory, { pcm: () => true });
+  assert.equal(memory[OFFSETS.PCMdataStatus], 2);
+  memory[OFFSETS.PCMdataCommand] = STOP;
+  dispatchIsoKernel(memory, { pcm: () => true });
+  assert.equal(memory[OFFSETS.PCMdataStatus], 1);
   memory[OFFSETS.DisplayCommand] = SET_EXCLUSIVE_MODE;
   assert.equal(dispatchIsoKernel(memory, { setDisplayMode: () => true }).success, true);
   assert.equal(memory[OFFSETS.DisplayStatus], 3);
