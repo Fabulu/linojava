@@ -6,7 +6,7 @@ import {
   GET_DATA_OFFSET, PLAY_CONTINUOUSLY, PAUSE, STOP,
   GET_CONSOLE_INPUT, CLEAR_CONSOLE_BUFFER, KEY_OFFSETS,
   READ_POINTER, READ_TIME, READ_UTC_TIME, READ_COUNTS, SLEEP,
-  K_READ, K_WRITE, K_DESTROY,
+  WRITE, SET_SIZE, DESTROY, MKDIR, K_READ, K_WRITE, K_DESTROY,
   createIsoKernelMemory, dispatchIsoKernel,
 } from "../src/compiler/isokernel-abi.js";
 
@@ -36,6 +36,25 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   assert.equal(memory[OFFSETS.BlockSize], 3);
   assert.equal(memory[OFFSETS.FileSize], 4);
   assert.equal(memory[OFFSETS.FileStatus], 5);
+  const files = new Map();
+  "SAVE.LIN\0".split("").forEach((character, index) => { memory[150 + index] = character.charCodeAt(0); });
+  new Uint8Array(memory.buffer).set([10, 20, 30], 200 * 4);
+  memory[OFFSETS.FileName] = 150;
+  memory[OFFSETS.FilePosition] = 2;
+  memory[OFFSETS.BlockPointer] = 200;
+  memory[OFFSETS.BlockSize] = 3;
+  memory[OFFSETS.FileCommand] = WRITE;
+  dispatchIsoKernel(memory, { files });
+  assert.deepEqual(Array.from(files.get("save.lin")), [0, 0, 10, 20, 30]);
+  memory[OFFSETS.FileSize] = 4;
+  memory[OFFSETS.FileCommand] = SET_SIZE;
+  dispatchIsoKernel(memory, { files });
+  assert.deepEqual(Array.from(files.get("save.lin")), [0, 0, 10, 20]);
+  memory[OFFSETS.FileCommand] = DESTROY;
+  assert.equal(dispatchIsoKernel(memory, { files }).success, true);
+  assert.equal(files.has("save.lin"), false);
+  memory[OFFSETS.FileCommand] = MKDIR;
+  assert.equal(dispatchIsoKernel(memory, { files }).success, true);
   memory[OFFSETS.FileCommand] = GET_DIR;
   memory[OFFSETS.FileName] = 100;
   memory[OFFSETS.BlockSize] = 4;

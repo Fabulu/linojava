@@ -26,6 +26,10 @@ export const COMMANDS = Object.freeze({
   READ_POINTER: 12,
   TEST: 13,
   READ: 14,
+  WRITE: 15,
+  SET_SIZE: 16,
+  DESTROY: 17,
+  MKDIR: 21,
   GET_DIR: 20,
   READ_TIME: 27,
   READ_UTC_TIME: 28,
@@ -49,6 +53,10 @@ export const GET_CONSOLE_INPUT = COMMANDS.GET_CONSOLE_INPUT;
 export const CLEAR_CONSOLE_BUFFER = COMMANDS.CLEAR_CONSOLE_BUFFER;
 export const TEST = COMMANDS.TEST;
 export const READ = COMMANDS.READ;
+export const WRITE = COMMANDS.WRITE;
+export const SET_SIZE = COMMANDS.SET_SIZE;
+export const DESTROY = COMMANDS.DESTROY;
+export const MKDIR = COMMANDS.MKDIR;
 export const GET_DIR = COMMANDS.GET_DIR;
 export const READ_POINTER = COMMANDS.READ_POINTER;
 export const READ_TIME = COMMANDS.READ_TIME;
@@ -233,6 +241,44 @@ function namedFile(host, name) {
   return key === undefined ? null : bytesFrom(files[key]);
 }
 
+function storeNamedFile(host, name, bytes) {
+  const value = bytesFrom(bytes);
+  const result = host.writeFile?.(name, value);
+  if (result?.then) throw new TypeError("IsoKernel host.writeFile must be synchronous");
+  if (result === false || result?.success === false) return false;
+  const files = host.files ?? host.virtualFiles;
+  if (files instanceof Map) {
+    const wanted = canonicalFileName(name);
+    const previous = [...files.keys()].find((key) => canonicalFileName(key) === wanted);
+    files.set(previous ?? wanted, value);
+  } else if (files && typeof files === "object") {
+    files[canonicalFileName(name)] = value;
+  } else if (result === undefined) {
+    return false;
+  }
+  host.fileChanged?.(name, value);
+  return true;
+}
+
+function removeNamedFile(host, name) {
+  const result = host.destroyFile?.(name);
+  if (result?.then) throw new TypeError("IsoKernel host.destroyFile must be synchronous");
+  if (result === false || result?.success === false) return false;
+  const files = host.files ?? host.virtualFiles;
+  let removed = result === true || result?.success === true;
+  if (files instanceof Map) {
+    const wanted = canonicalFileName(name);
+    for (const key of [...files.keys()]) {
+      if (canonicalFileName(key) === wanted) removed = files.delete(key) || removed;
+    }
+  } else if (files && typeof files === "object") {
+    const key = Object.keys(files).find((candidate) => canonicalFileName(candidate) === canonicalFileName(name));
+    if (key !== undefined) { delete files[key]; removed = true; }
+  }
+  if (removed) host.fileChanged?.(name, null);
+  return removed;
+}
+
 const defaultGlobalKStores = new WeakMap();
 
 function globalKStore(host) {
@@ -383,6 +429,57 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
         memory[at(OFFSETS.FileSize)] = source.length;
         memory[at(OFFSETS.FileStatus)] = 1 | 4;
       }
+    } else if (fileCommand === WRITE) {
+      const fileName = linoString(memory, memory[at(OFFSETS.FileName)] | 0);
+      const position = Math.max(0, memory[at(OFFSETS.FilePosition)] | 0);
+      const count = Math.max(0, memory[at(OFFSETS.BlockSize)] | 0);
+      const sourceUnit = memory[at(OFFSETS.BlockPointer)] | 0;
+      const sourceByte = sourceUnit * 4;
+      const allBytes = new Uint8Array(memory.buffer, memory.byteOffset, memory.byteLength);
+      if (sourceUnit < 0 || sourceByte + count > allBytes.length) throw new RangeError("file write outside memory");
+      const previous = namedFile(host, fileName) ?? new Uint8Array(0);
+      const next = new Uint8Array(Math.max(previous.length, position + count));
+      next.set(previous);
+      next.set(allBytes.slice(sourceByte, sourceByte + count), position);
+      if (!storeNamedFile(host, fileName, next)) {
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileerror;
+        success = false;
+      } else {
+        memory[at(OFFSETS.FileSize)] = next.length;
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileready | ABI_CONSTANTS.permittowrite;
+      }
+    } else if (fileCommand === SET_SIZE) {
+      const fileName = linoString(memory, memory[at(OFFSETS.FileName)] | 0);
+      const size = Math.max(0, memory[at(OFFSETS.FileSize)] | 0);
+      const previous = namedFile(host, fileName) ?? new Uint8Array(0);
+      const next = new Uint8Array(size);
+      next.set(previous.subarray(0, Math.min(previous.length, size)));
+      if (!storeNamedFile(host, fileName, next)) {
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileerror;
+        success = false;
+      } else {
+        memory[at(OFFSETS.FileSize)] = size;
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileready | ABI_CONSTANTS.permittowrite;
+      }
+    } else if (fileCommand === DESTROY) {
+      const fileName = linoString(memory, memory[at(OFFSETS.FileName)] | 0);
+      if (!removeNamedFile(host, fileName)) {
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileerror;
+        success = false;
+      } else {
+        memory[at(OFFSETS.FileSize)] = 0;
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileready;
+      }
+    } else if (fileCommand === MKDIR) {
+      const fileName = linoString(memory, memory[at(OFFSETS.FileName)] | 0);
+      const result = host.makeDirectory?.(fileName);
+      if (result?.then) throw new TypeError("IsoKernel host.makeDirectory must be synchronous");
+      if (result === false || result?.success === false) {
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileerror;
+        success = false;
+      } else {
+        memory[at(OFFSETS.FileStatus)] = ABI_CONSTANTS.fileready;
+      }
     } else if (fileCommand === GET_DIR) {
       const entries = host.directory ?? host.getDirectory?.() ?? [];
       const text = Array.isArray(entries) ? entries.join("\0") : String(entries);
@@ -441,9 +538,13 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
         if (!(saved instanceof Int32Array) || saved.length !== 255) success = false;
         else memory.set(saved, data);
       } else if (globalKCommand === K_WRITE) {
-        store.set(name, memory.slice(data, data + 255));
+        const saved = memory.slice(data, data + 255);
+        store.set(name, saved);
+        host.globalKChanged?.(name, saved);
       } else if (!store.delete(name)) {
         success = false;
+      } else {
+        host.globalKChanged?.(name, null);
       }
     }
   } catch { success = false; memory[at(OFFSETS.FileStatus)] = 2; }
