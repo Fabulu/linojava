@@ -8,7 +8,9 @@ The current vertical slice is an ahead-of-time JavaScript backend. It resolves
 symbols while building, groups source instructions into basic blocks, and emits
 native JavaScript arithmetic over an `Int32Array` Lino workspace. Straight-line
 instructions fall through generated JavaScript cases without paying a switch
-dispatch for every source statement. The browser
+dispatch for every source statement. Large projects are split into bounded
+2,048-instruction runners, so Chromium does not have to compile or enter one
+pathological 56,000-case function. The browser
 host owns display, input, audio, persistence, and other `isocall` services.
 JavaScript is the product backend: performance work compiles larger Lino regions
 into optimized JavaScript and replaces historical native fragments with exact
@@ -83,6 +85,12 @@ arithmetic services used throughout Noctis polygon projection. The browser host
 also implements queued console characters, the live held-key table, pointer
 state, monotonic counts, and millisecond sleeps, which provides both ASCII
 commands and physical WASD, arrow, modifier, function, and keypad controls.
+
+The complete 73-module project has now reached real game frames in Chromium.
+A focused browser smoke rendered the cupola framebuffer, advanced across five
+frames, accepted held W and Left Arrow input, and produced no page or console
+errors. Renderer fidelity and complete game-mode coverage remain separate
+acceptance work.
 
 ## Project boundaries
 

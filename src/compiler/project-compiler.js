@@ -159,9 +159,12 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set()) {
 }
 
 export function emitRunner(linked, options = {}) {
-  const instructions = lowerOperands(linked);
+  const instructions = options.instructions ?? lowerOperands(linked);
   const serviceIntrinsicIds = options.serviceIntrinsicIds ?? new Set();
   const cases = instructions.map((instruction) => emitInstruction(instruction, serviceIntrinsicIds)).join("\n");
+  const defaultCase = options.transfer
+    ? 'default: return save("transfer", executed);'
+    : 'default: halted=true; return save("halted",executed);';
   return `
     const fb = new ArrayBuffer(4), fi = new Int32Array(fb), ff = new Float32Array(fb);
     const idiv = (a,b) => { b |= 0; if (b === 0) throw new RangeError("Lino division by zero"); return ((a|0)/b)|0; };
@@ -183,7 +186,7 @@ export function emitRunner(linked, options = {}) {
       if(halted)return save("halted",0);
       runner: while(true){ switch(pc){
         ${cases}
-        default: halted=true; return save("halted",executed);
+        ${defaultCase}
       }}
       return save("budget",executed);
     };
@@ -205,7 +208,15 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     return implementation(machine, linked);
   };
   const serviceIntrinsicIds = new Set(Object.keys(implementations).filter((id) => id.startsWith("service:")));
-  const runner = new Function("dispatch", "native", emitRunner(linked, { serviceIntrinsicIds }))(dispatch, native);
+  const lowered = lowerOperands(linked);
+  const regionSize = Math.max(256, options.regionSize | 0 || 2048);
+  const runners = [];
+  for (let start = 0; start < lowered.length; start += regionSize) {
+    const instructions = lowered.slice(start, Math.min(start + regionSize, lowered.length));
+    runners.push(new Function("dispatch", "native", emitRunner(linked, {
+      instructions, serviceIntrinsicIds, transfer: true,
+    }))(dispatch, native));
+  }
   const machine = {
     memory: new Int32Array(linked.initialMemory),
     stack: new Int32Array(1024), depth: 0,
@@ -214,7 +225,23 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
   };
   return {
     linked, machine,
-    run(maxInstructions) { return runner(machine, maxInstructions); },
+    run(maxInstructions = 10000000) {
+      const limit = Math.max(0, Number(maxInstructions) || 0);
+      let executed = 0;
+      while (executed < limit) {
+        const region = Math.floor((machine.pc | 0) / regionSize);
+        const runner = runners[region];
+        if (!runner) {
+          machine.halted = true;
+          return { status: "halted", instructions: executed, X: machine.X | 0 };
+        }
+        const result = runner(machine, limit - executed);
+        executed += result.instructions;
+        if (result.status === "transfer") continue;
+        return { ...result, instructions: executed };
+      }
+      return { status: machine.halted ? "halted" : "budget", instructions: executed, X: machine.X | 0 };
+    },
     reset() {
       machine.memory.set(linked.initialMemory); machine.stack.fill(0); machine.depth = 0;
       machine.A = machine.B = machine.C = machine.D = machine.E = 0; machine.X = DONE;
