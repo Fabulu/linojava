@@ -151,6 +151,29 @@ const IDS = Object.freeze({
   terrainEdgeRows: "native:pgtex.txt:90e8ae12",
   polygonEdges: "native:pgtex.txt:1f274c7a",
   terrainUvNext: "native:pgtex.txt:051b529b",
+  groundTreePeakHigh: "native:grnd.txt:5aaca1fb",
+  groundTreePeakLow: "native:grnd.txt:35ce6b89",
+  groundTreeDrawAccumulator: "native:grnd.txt:5a0abe08",
+  groundTreeScale: "native:grnd.txt:47838933",
+  groundTreeSpreadAccumulator: "native:grnd.txt:d2eb8199",
+  groundTreeSpread: "native:grnd.txt:2392016a",
+  groundBranchWidth: "native:grnd.txt:0bc3d08f",
+  groundRootHeight: "native:grnd.txt:13657160",
+  groundTreeFlandom: "native:grnd.txt:be39244e",
+  groundRoundHillRadius: "native:grnd.txt:a140e471",
+  groundRoundHillDx: "native:grnd.txt:64b068c0",
+  groundRoundHillProfile: "native:grnd.txt:282ae603",
+  groundAddSurfaceValue: "native:grnd.txt:a5e0676d",
+  groundSubtract127: "native:grnd.txt:abd5bafb",
+  groundMirror254: "native:grnd.txt:72aa42a4",
+  groundSubtractMaximum: "native:grnd.txt:4d14bab5",
+  groundChopHeight: "native:grnd.txt:737ce8e6",
+  groundCraterHeight: "native:grnd.txt:dce8a0d5",
+  groundCraterRadius: "native:grnd.txt:eadc5a2e",
+  groundCraterProfile: "native:grnd.txt:7538c474",
+  groundCraterPower: "native:grnd.txt:f3a87253",
+  groundSubtractLimit: "native:grnd.txt:d1359547",
+  groundLimitFloat: "native:grnd.txt:df1c1afa",
 });
 
 const SERVICE_IDS = Object.freeze({
@@ -1762,6 +1785,252 @@ function terrainUvNext(machine, linked) {
   project(y, 34, "SPvn");
 }
 
+function groundStoreFloat(machine, linked, destination, number) {
+  writeNamedFloat32(machine, linked, destination, number);
+  return readNamedFloat32(machine.memory, linked, destination);
+}
+
+function groundTreeAffine(machine, linked, multiplier, addend, destination) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRtreefl"),
+    readFloat64(memory, address(linked, multiplier)),
+    control,
+    "multiply",
+  );
+  if (addend) result = scalarBinaryNumber(
+    result,
+    readFloat64(memory, address(linked, addend)),
+    control,
+    "add",
+  );
+  groundStoreFloat(machine, linked, destination, result);
+}
+
+function groundTreeAdd(machine, linked, addend, destination) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRtreefl"),
+    readFloat64(memory, address(linked, addend)),
+    floatingPoint(machine).control,
+    "add",
+  );
+  groundStoreFloat(machine, linked, destination, result);
+}
+
+function groundTreeDrawAccumulator(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const integer = value(memory, linked, "GRtreeci");
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRtreefl"),
+    integer,
+    control,
+    "multiply",
+  );
+  result = scalarBinaryNumber(result, integer, control, "add");
+  writeFloat64(memory, address(linked, "GRtreeacc0"), result);
+}
+
+function groundTreeDifference(machine, linked, multiplier, destination) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const product = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRtreefl"),
+    multiplier,
+    control,
+    "multiply",
+  );
+  const result = scalarBinaryNumber(
+    readFloat64(memory, address(linked, "GRtreeacc0")),
+    product,
+    control,
+    "subtract",
+  );
+  groundStoreFloat(machine, linked, destination, result);
+}
+
+function groundTreeSpreadAccumulator(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRtreefl"),
+    readFloat64(memory, address(linked, "GRK050L")),
+    control,
+    "multiply",
+  );
+  result = scalarBinaryNumber(
+    result,
+    readFloat64(memory, address(linked, "GRK075L")),
+    control,
+    "add",
+  );
+  writeFloat64(memory, address(linked, "GRtreeacc0"), result);
+}
+
+function groundTreeFlandom(machine, linked) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    value(memory, linked, "GRtreeci"),
+    readFloat64(memory, address(linked, "GRKFL0")),
+    floatingPoint(machine).control,
+    "multiply",
+  );
+  groundStoreFloat(machine, linked, "GRtreefl", result);
+}
+
+function groundRoundHillRadius(machine, linked) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    value(memory, linked, "SUia"),
+    readFloat64(memory, address(linked, "GRKPI2L")),
+    floatingPoint(machine).control,
+    "divide",
+  );
+  groundStoreFloat(machine, linked, "GRfv", result);
+}
+
+function groundRoundHillDx(machine, linked) {
+  groundStoreFloat(machine, linked, "GRfdx", value(machine.memory, linked, "GRdxi"));
+}
+
+function groundRoundHillProfile(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const dz = groundStoreFloat(machine, linked, "GRfdz", value(memory, linked, "GRdzi"));
+  const dx = readNamedFloat32(memory, linked, "GRfdx");
+  const dx2 = scalarBinaryNumber(dx, dx, control, "multiply");
+  const dz2 = scalarBinaryNumber(dz, dz, control, "multiply");
+  const distanceSquared = scalarBinaryNumber(dx2, dz2, control, "add");
+  writeFloat64(memory, address(linked, "GRfs0"), distanceSquared);
+  const distance = groundStoreFloat(machine, linked, "GRfd", Math.sqrt(distanceSquared));
+  let angle = scalarBinaryNumber(
+    distance,
+    readNamedFloat32(memory, linked, "GRfv"),
+    control,
+    "divide",
+  );
+  writeFloat64(memory, address(linked, "GRfs0"), angle);
+  angle = Math.cos(angle);
+  const height = scalarBinaryNumber(
+    angle,
+    readNamedFloat32(memory, linked, "GRfht"),
+    control,
+    "multiply",
+  );
+  groundStoreFloat(machine, linked, "GRfy", height);
+}
+
+function groundAddSurfaceValue(machine, linked) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRfy"),
+    value(memory, linked, "GRsval"),
+    floatingPoint(machine).control,
+    "add",
+  );
+  groundStoreFloat(machine, linked, "GRfy", result);
+}
+
+function groundSubtractToScratch(machine, linked, right, rightIsInteger = false) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRfy"),
+    rightIsInteger ? value(memory, linked, right) : readFloat64(memory, address(linked, right)),
+    floatingPoint(machine).control,
+    "subtract",
+  );
+  writeFloat64(memory, address(linked, "GRfs0"), result);
+}
+
+function groundMirror254(machine, linked) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    readFloat64(memory, address(linked, "GRK254L")),
+    readNamedFloat32(memory, linked, "GRfy"),
+    floatingPoint(machine).control,
+    "subtract",
+  );
+  groundStoreFloat(machine, linked, "GRfy", result);
+}
+
+function groundSubtractMaximum(machine, linked) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "GRfy"),
+    readNamedFloat32(memory, linked, "GRfhmt"),
+    floatingPoint(machine).control,
+    "subtract",
+  );
+  writeFloat64(memory, address(linked, "GRfs0"), result);
+}
+
+function groundChopHeight(machine, linked) {
+  const memory = machine.memory;
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "GRcwc") & 0xffff;
+  memory[address(linked, "GRfti")] = convertToInt32(
+    readNamedFloat32(memory, linked, "GRfy"),
+    fpu.control,
+  );
+  fpu.control = value(memory, linked, "GRcwn") & 0xffff;
+}
+
+function groundCraterHeight(machine, linked) {
+  const memory = machine.memory;
+  const result = scalarBinaryNumber(
+    value(memory, linked, "SUia"),
+    readNamedFloat32(memory, linked, "GRfht"),
+    floatingPoint(machine).control,
+    "multiply",
+  );
+  groundStoreFloat(machine, linked, "GRfsch", result);
+}
+
+function groundCraterRadius(machine, linked) {
+  groundStoreFloat(machine, linked, "GRfscr", value(machine.memory, linked, "SUia"));
+}
+
+function groundCraterProfile(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const distance = groundStoreFloat(machine, linked, "GRfd", Math.sqrt(value(memory, linked, "GRfd2")));
+  let ratio = scalarBinaryNumber(
+    distance,
+    readNamedFloat32(memory, linked, "GRfscr"),
+    control,
+    "divide",
+  );
+  ratio = scalarBinaryNumber(
+    readFloat64(memory, address(linked, "GRKPIL")),
+    ratio,
+    control,
+    "multiply",
+  );
+  ratio = Math.sin(ratio);
+  ratio = scalarBinaryNumber(
+    ratio,
+    readNamedFloat32(memory, linked, "GRfsch"),
+    control,
+    "multiply",
+  );
+  groundStoreFloat(machine, linked, "GRfy", ratio);
+}
+
+function groundCraterPower(machine, linked) {
+  const memory = machine.memory;
+  const result = Math.pow(
+    readNamedFloat32(memory, linked, "GRfy"),
+    readNamedFloat32(memory, linked, "GRfhmt"),
+  );
+  groundStoreFloat(machine, linked, "GRfy", result);
+}
+
+function groundLimitFloat(machine, linked) {
+  groundStoreFloat(machine, linked, "GRfy", value(machine.memory, linked, "GRfscl"));
+}
+
 function enterFloatingPoint(machine, linked) {
   const fpu = floatingPoint(machine);
   machine.memory[address(linked, "FCWSAV")] = (fpu.control | 0x40) & 0xffff;
@@ -2774,6 +3043,48 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.terrainEdgeRows]: terrainEdgeRows,
     [IDS.polygonEdges]: polygonEdges,
     [IDS.terrainUvNext]: terrainUvNext,
+    [IDS.groundTreePeakHigh]: (machine, linked) => groundTreeAffine(
+      machine, linked, "GRK090L", "GRK010L", "GRtreepeakf",
+    ),
+    [IDS.groundTreePeakLow]: (machine, linked) => groundTreeAdd(
+      machine, linked, "GRK075L", "GRtreepeakf",
+    ),
+    [IDS.groundTreeDrawAccumulator]: groundTreeDrawAccumulator,
+    [IDS.groundTreeScale]: (machine, linked) => groundTreeDifference(
+      machine, linked, value(machine.memory, linked, "GRtreeci"), "GRtreescalef",
+    ),
+    [IDS.groundTreeSpreadAccumulator]: groundTreeSpreadAccumulator,
+    [IDS.groundTreeSpread]: (machine, linked) => groundTreeDifference(
+      machine,
+      linked,
+      readFloat64(machine.memory, address(linked, "GRK050L")),
+      "GRtreespreadf",
+    ),
+    [IDS.groundBranchWidth]: (machine, linked) => groundTreeAffine(
+      machine, linked, "GRK015L", "GRK005L", "GRbranchwidthf",
+    ),
+    [IDS.groundRootHeight]: (machine, linked) => groundTreeAdd(
+      machine, linked, "GRK005L", "GRrootheightf",
+    ),
+    [IDS.groundTreeFlandom]: groundTreeFlandom,
+    [IDS.groundRoundHillRadius]: groundRoundHillRadius,
+    [IDS.groundRoundHillDx]: groundRoundHillDx,
+    [IDS.groundRoundHillProfile]: groundRoundHillProfile,
+    [IDS.groundAddSurfaceValue]: groundAddSurfaceValue,
+    [IDS.groundSubtract127]: (machine, linked) => groundSubtractToScratch(
+      machine, linked, "GRK127L",
+    ),
+    [IDS.groundMirror254]: groundMirror254,
+    [IDS.groundSubtractMaximum]: groundSubtractMaximum,
+    [IDS.groundChopHeight]: groundChopHeight,
+    [IDS.groundCraterHeight]: groundCraterHeight,
+    [IDS.groundCraterRadius]: groundCraterRadius,
+    [IDS.groundCraterProfile]: groundCraterProfile,
+    [IDS.groundCraterPower]: groundCraterPower,
+    [IDS.groundSubtractLimit]: (machine, linked) => groundSubtractToScratch(
+      machine, linked, "GRfscl", true,
+    ),
+    [IDS.groundLimitFloat]: groundLimitFloat,
     ...overrides,
   };
 }
