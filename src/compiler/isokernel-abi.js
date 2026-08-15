@@ -18,6 +18,7 @@ export const COMMANDS = Object.freeze({
   GET_CONSOLE_INPUT: 10,
   CLEAR_CONSOLE_BUFFER: 11,
   READ_POINTER: 12,
+  TEST: 13,
   READ: 14,
   GET_DIR: 20,
   READ_TIME: 27,
@@ -34,6 +35,7 @@ export const SET_COOPERATIVE_MODE = COMMANDS.SET_COOPERATIVE_MODE;
 export const SET_EXCLUSIVE_MODE = COMMANDS.SET_EXCLUSIVE_MODE;
 export const GET_CONSOLE_INPUT = COMMANDS.GET_CONSOLE_INPUT;
 export const CLEAR_CONSOLE_BUFFER = COMMANDS.CLEAR_CONSOLE_BUFFER;
+export const TEST = COMMANDS.TEST;
 export const READ = COMMANDS.READ;
 export const GET_DIR = COMMANDS.GET_DIR;
 export const READ_POINTER = COMMANDS.READ_POINTER;
@@ -317,7 +319,13 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
       if (Array.isArray(host.consoleInput)) host.consoleInput.length = 0;
       memory[at(OFFSETS.ConsoleInput)] = 0;
     }
-    if (fileCommand === READ) {
+    if (fileCommand === TEST) {
+      const fileName = linoString(memory, memory[at(OFFSETS.FileName)] | 0);
+      const source = namedFile(host, fileName);
+      memory[at(OFFSETS.FileSize)] = source?.length ?? 0;
+      memory[at(OFFSETS.FileStatus)] = source === null
+        ? ABI_CONSTANTS.fileerror : ABI_CONSTANTS.fileready;
+    } else if (fileCommand === READ) {
       const fileNameAddress = memory[at(OFFSETS.FileName)] | 0;
       const fileName = linoString(memory, fileNameAddress);
       const source = fileNameAddress === 0
