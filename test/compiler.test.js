@@ -22,9 +22,25 @@ test("compiles blocks and runs a yielding Lino programme", async () => {
   assert.equal(program.get("player_x"), 157);
   assert.equal(program.get("player_y"), 90);
   assert.equal(program.get("frame"), 1);
+
+  const saved = program.snapshot();
+  program.set("player_x", 12);
+  program.step();
+  program.restore(saved);
+  assert.equal(program.get("player_x"), 157);
+  assert.equal(program.get("frame"), 1);
 });
 
 test("rejects native byte fragments instead of silently changing them", () => {
   const source = '"programme" "start" { 90 } end;';
   assert.throws(() => compile(source), /portable intrinsic/);
+});
+
+test("rejects snapshots from another machine layout", async () => {
+  const generated = await loadGenerated('"programme" "start" isocall; -> start;');
+  const program = generated.createProgram({ isocall: () => true });
+  assert.throws(
+    () => program.restore({ version: 1, memory: [1, 2], registers: {}, pc: 0 }),
+    /Incompatible LinoJava snapshot/,
+  );
 });

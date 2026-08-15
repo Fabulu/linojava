@@ -339,6 +339,16 @@ export function compile(source, options = {}) {
 `    step,\n` +
 `    get(name) { const symbol = symbolTable[String(name).toLowerCase()]; if (!symbol) throw new Error(\`Unknown Lino symbol: \${name}\`); return symbol.kind === "constant" ? symbol.value : mem[symbol.address]; },\n` +
 `    set(name, value) { const symbol = symbolTable[String(name).toLowerCase()]; if (!symbol || symbol.kind !== "memory") throw new Error(\`Not a writable Lino symbol: \${name}\`); mem[symbol.address] = value | 0; },\n` +
+`    snapshot() { return { version: 1, memory: Array.from(mem), registers: { A, B, C, D, E }, pc, halted, callStack: Array.from(callStack) }; },\n` +
+`    restore(saved) {\n` +
+`      if (!saved || saved.version !== 1 || !Array.isArray(saved.memory) || saved.memory.length !== mem.length) throw new Error("Incompatible LinoJava snapshot");\n` +
+`      mem.set(saved.memory.map((value) => value | 0));\n` +
+`      const registers = saved.registers ?? {};\n` +
+`      A = registers.A | 0; B = registers.B | 0; C = registers.C | 0; D = registers.D | 0; E = registers.E | 0;\n` +
+`      pc = saved.pc | 0; halted = Boolean(saved.halted);\n` +
+`      callStack.length = 0;\n` +
+`      if (Array.isArray(saved.callStack)) for (const value of saved.callStack) callStack.push(value | 0);\n` +
+`    },\n` +
 `    get registers() { return { A, B, C, D, E }; },\n` +
 `    get halted() { return halted; }\n` +
 `  };\n` +

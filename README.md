@@ -22,7 +22,9 @@ node .\bin\linojava.js .\examples\browser_probe.lino .\examples\browser_probe.js
 The generated ES module exports `createProgram(host)`. Its `step()` method runs
 compiled blocks until the program halts, reaches a yielding host call, or hits
 the supplied safety budget. The host can read and write named Lino variables
-through `get()` and `set()`.
+through `get()` and `set()`. Versioned `snapshot()` and `restore()` methods
+capture the complete workspace, registers, programme counter, and call stack
+for browser persistence.
 
 ## Current language surface
 
