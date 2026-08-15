@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   KERNEL_UNITS, OFFSETS, COMMAND_OFFSETS, READ, GET_DIR, RETRACE,
+  SET_COOPERATIVE_MODE, SET_EXCLUSIVE_MODE,
   GET_CONSOLE_INPUT, CLEAR_CONSOLE_BUFFER, KEY_OFFSETS,
   READ_POINTER, READ_TIME, READ_UTC_TIME, READ_COUNTS, SLEEP,
   createIsoKernelMemory, dispatchIsoKernel,
@@ -25,6 +26,16 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   memory[OFFSETS.DisplayCommand] = RETRACE;
   assert.equal(dispatchIsoKernel(memory, { retrace: () => true }).yielded, true);
   assert.equal(memory[OFFSETS.DisplayCommand], 0);
+  memory[OFFSETS.DisplayStatus] = 2;
+  memory[OFFSETS.DisplayCommand] = SET_EXCLUSIVE_MODE;
+  assert.equal(dispatchIsoKernel(memory).failed, true);
+  assert.equal(memory[OFFSETS.DisplayStatus], 2);
+  memory[OFFSETS.DisplayCommand] = SET_EXCLUSIVE_MODE;
+  assert.equal(dispatchIsoKernel(memory, { setDisplayMode: () => true }).success, true);
+  assert.equal(memory[OFFSETS.DisplayStatus], 3);
+  memory[OFFSETS.DisplayCommand] = SET_COOPERATIVE_MODE;
+  assert.equal(dispatchIsoKernel(memory).success, true);
+  assert.equal(memory[OFFSETS.DisplayStatus], 2);
 
   const consoleInput = [65, 66];
   memory[OFFSETS.ConsoleCommand] = GET_CONSOLE_INPUT;

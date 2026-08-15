@@ -13,6 +13,8 @@ export const LAST_KERNEL_UNIT = KERNEL_UNITS - 1;
 export const COMMANDS = Object.freeze({
   IDLE: 0,
   RETRACE: 1,
+  SET_COOPERATIVE_MODE: 2,
+  SET_EXCLUSIVE_MODE: 3,
   GET_CONSOLE_INPUT: 10,
   CLEAR_CONSOLE_BUFFER: 11,
   READ_POINTER: 12,
@@ -25,6 +27,8 @@ export const COMMANDS = Object.freeze({
 });
 export const IDLE = COMMANDS.IDLE;
 export const RETRACE = COMMANDS.RETRACE;
+export const SET_COOPERATIVE_MODE = COMMANDS.SET_COOPERATIVE_MODE;
+export const SET_EXCLUSIVE_MODE = COMMANDS.SET_EXCLUSIVE_MODE;
 export const GET_CONSOLE_INPUT = COMMANDS.GET_CONSOLE_INPUT;
 export const CLEAR_CONSOLE_BUFFER = COMMANDS.CLEAR_CONSOLE_BUFFER;
 export const READ = COMMANDS.READ;
@@ -201,6 +205,27 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
         { liveRegion: memory[at(OFFSETS.DisplayLiveRegion)] },
       );
       yielded ||= result === true || result?.yield === true;
+    } else if (displayCommand === SET_COOPERATIVE_MODE || displayCommand === SET_EXCLUSIVE_MODE) {
+      const exclusive = displayCommand === SET_EXCLUSIVE_MODE;
+      const request = {
+        exclusive,
+        width: memory[at(OFFSETS.DisplayWidth)] | 0,
+        height: memory[at(OFFSETS.DisplayHeight)] | 0,
+        x: memory[at(OFFSETS.DisplayXPosition)] | 0,
+        y: memory[at(OFFSETS.DisplayYPosition)] | 0,
+      };
+      const result = host.setDisplayMode?.(exclusive ? "exclusive" : "cooperative", request);
+      const accepted = result === true || result?.success === true
+        || (!exclusive && result !== false && result?.success !== false);
+      if (accepted) {
+        if (exclusive) memory[at(OFFSETS.DisplayStatus)] |= ABI_CONSTANTS.exclusive;
+        else memory[at(OFFSETS.DisplayStatus)] &= ~ABI_CONSTANTS.exclusive;
+      } else {
+        // Browsers cannot enter fullscreen without a live user gesture. Do
+        // not claim success and leave iGUI in an imaginary OS display mode.
+        memory[at(OFFSETS.DisplayStatus)] &= ~ABI_CONSTANTS.exclusive;
+        success = false;
+      }
     }
     if (consoleCommand === GET_CONSOLE_INPUT) {
       let input;
