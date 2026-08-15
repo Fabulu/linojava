@@ -24,6 +24,17 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   assert.deepEqual(Array.from(new Uint8Array(memory.buffer).slice(400, 403)), [8, 9, 0]);
   assert.equal(memory[OFFSETS.FileCommand], 0);
   assert.equal(syncedDisplay.width, 0);
+  "DIGIMAP2.BIN\0".split("").forEach((character, index) => { memory[110 + index] = character.charCodeAt(0); });
+  memory[OFFSETS.FileName] = 110;
+  memory[OFFSETS.FilePosition] = 1;
+  memory[OFFSETS.BlockPointer] = 130;
+  memory[OFFSETS.BlockSize] = 3;
+  memory[OFFSETS.FileCommand] = READ;
+  dispatchIsoKernel(memory, { files: new Map([["digimap2.bin", Uint8Array.from([1, 2, 3, 4])]]) });
+  assert.deepEqual(Array.from(new Uint8Array(memory.buffer).slice(520, 523)), [2, 3, 4]);
+  assert.equal(memory[OFFSETS.BlockSize], 3);
+  assert.equal(memory[OFFSETS.FileSize], 4);
+  assert.equal(memory[OFFSETS.FileStatus], 5);
   memory[OFFSETS.FileCommand] = GET_DIR;
   memory[OFFSETS.FileName] = 100;
   memory[OFFSETS.BlockSize] = 4;

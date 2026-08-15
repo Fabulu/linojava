@@ -183,6 +183,42 @@ function bytesFrom(value) {
   return value instanceof Uint8Array ? value : new Uint8Array(value ?? []);
 }
 
+function linoString(memory, address, limit = 1024) {
+  if (address <= 0 || address >= memory.length) return "";
+  let value = "";
+  for (let index = 0; index < limit && address + index < memory.length; index += 1) {
+    const unit = memory[address + index] | 0;
+    if (unit === 0) break;
+    value += String.fromCharCode(unit & 0xffff);
+  }
+  return value;
+}
+
+function canonicalFileName(value) {
+  return String(value).replaceAll("\\", "/").toLowerCase();
+}
+
+function namedFile(host, name) {
+  const direct = host.readFile?.(name);
+  if (direct?.then) throw new TypeError("IsoKernel host.readFile must be synchronous");
+  if (direct !== undefined && direct !== null) return bytesFrom(direct);
+  const files = host.files ?? host.virtualFiles;
+  if (!files) return null;
+  const wanted = canonicalFileName(name);
+  if (files instanceof Map) {
+    if (files.has(name)) return bytesFrom(files.get(name));
+    if (files.has(wanted)) return bytesFrom(files.get(wanted));
+    for (const [key, value] of files) {
+      if (canonicalFileName(key) === wanted) return bytesFrom(value);
+    }
+    return null;
+  }
+  if (Object.hasOwn(files, name)) return bytesFrom(files[name]);
+  if (Object.hasOwn(files, wanted)) return bytesFrom(files[wanted]);
+  const key = Object.keys(files).find((candidate) => canonicalFileName(candidate) === wanted);
+  return key === undefined ? null : bytesFrom(files[key]);
+}
+
 const defaultGlobalKStores = new WeakMap();
 
 function globalKStore(host) {
@@ -282,18 +318,30 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
       memory[at(OFFSETS.ConsoleInput)] = 0;
     }
     if (fileCommand === READ) {
-      const source = host.stockfile ?? host.stockFile ?? [];
-      const bytes = bytesFrom(source);
+      const fileNameAddress = memory[at(OFFSETS.FileName)] | 0;
+      const fileName = linoString(memory, fileNameAddress);
+      const source = fileNameAddress === 0
+        ? bytesFrom(host.stockfile ?? host.stockFile ?? [])
+        : namedFile(host, fileName);
       const position = Math.max(0, memory[at(OFFSETS.FilePosition)] | 0);
       const count = Math.max(0, memory[at(OFFSETS.BlockSize)] | 0);
       const target = memory[at(OFFSETS.BlockPointer)] | 0;
       const targetByte = target * 4;
       const allBytes = new Uint8Array(memory.buffer, memory.byteOffset, memory.byteLength);
-      if (target < 0 || targetByte + count > allBytes.length || position > bytes.length) throw new RangeError("stockfile read outside memory or source");
-      allBytes.set(bytes.subarray(position, Math.min(position + count, bytes.length)), targetByte);
-      if (position + count > bytes.length) allBytes.fill(0, targetByte + Math.max(0, bytes.length - position), targetByte + count);
-      memory[at(OFFSETS.FileSize)] = bytes.length;
-      memory[at(OFFSETS.FileStatus)] = 1 | 4;
+      if (target < 0 || targetByte + count > allBytes.length) throw new RangeError("file read outside memory");
+      if (source === null || position > source.length) {
+        memory[at(OFFSETS.BlockSize)] = 0;
+        memory[at(OFFSETS.FileSize)] = source?.length ?? 0;
+        memory[at(OFFSETS.FileStatus)] = 2;
+        success = false;
+      } else {
+        const copied = Math.min(count, source.length - position);
+        allBytes.set(source.subarray(position, position + copied), targetByte);
+        if (copied < count) allBytes.fill(0, targetByte + copied, targetByte + count);
+        memory[at(OFFSETS.BlockSize)] = copied;
+        memory[at(OFFSETS.FileSize)] = source.length;
+        memory[at(OFFSETS.FileStatus)] = 1 | 4;
+      }
     } else if (fileCommand === GET_DIR) {
       const entries = host.directory ?? host.getDirectory?.() ?? [];
       const text = Array.isArray(entries) ? entries.join("\0") : String(entries);

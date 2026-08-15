@@ -68,9 +68,10 @@ The current Noctis closure loads 73 modules and lowers to 56,945 JavaScript
 instructions. All ordinary statements now parse, including unsigned apostrophe
 arithmetic and float predicates. Its 204 embedded native fragment occurrences
 map to 202 explicit intrinsic IDs rather than hidden interpreter operations.
-Portable JavaScript now implements 97 of those IDs across integer, framebuffer,
-page-memory, raster, projection, x87, geometry, and conversion families. The
-other 105 remain explicit runtime errors if an unported path reaches them.
+Portable JavaScript now implements all 202 IDs across integer, framebuffer,
+page-memory, raster, projection, x87, geometry, terrain, and conversion
+families. Missing native fragments in another Lino project remain explicit
+compile errors instead of silently changing program behavior.
 
 A focused full-game boot advances through initialization, rendering, repeated
 `RETRACE` calls, and the frame clock's real millisecond `SLEEP` contract. The
