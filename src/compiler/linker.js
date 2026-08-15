@@ -45,6 +45,14 @@ export function linkProject(project, options = {}) {
   const predefined = { ...DEFAULT_CONSTANTS, ...ABI_CONSTANTS, ...(options.constants ?? {}) };
   const constants = resolveConstants(declarations, projectConstants(project, predefined));
   const programme = collectProgramme(project);
+  const nativeFragments = programme.instructions
+    .filter((instruction) => instruction.op === "intrinsic")
+    .map((instruction) => ({
+      id: instruction.intrinsicId,
+      sourceId: instruction.sourceId,
+      line: instruction.line,
+      body: instruction.body,
+    }));
   const relativeWorkspace = measureWorkspace(declarations, constants);
   const initialized = buildInitializedData(declarations, constants, {
     codeLabels: new Set(programme.labels.keys()),
@@ -128,5 +136,6 @@ export function linkProject(project, options = {}) {
     relocations: initialized.relocations,
     unresolved,
     diagnostics: [],
+    nativeFragments,
   };
 }

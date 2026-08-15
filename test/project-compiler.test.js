@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { compileProject } from "../src/compiler/project-compiler.js";
+import { compileLinkedProject } from "../src/compiler/project-compiler.js";
+import { linkProject } from "../src/compiler/linker.js";
+import { loadProject } from "../src/compiler/project-loader.js";
 
 test("project compiler uses one shared data/call stack and preserves Lino status", async () => {
   const source = `
@@ -100,4 +103,18 @@ test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript
   assert.equal(result.X, 0x646f6e65);
   assert.equal(program.machine.memory[program.linked.symbols.get("result").value], 0x7fffffff);
   assert.equal(program.machine.B, -2);
+});
+
+test("native fragments require explicit portable intrinsic implementations", async () => {
+  const source = '"programme" { DE AD BE EF } ; end;';
+  const project = await loadProject("native.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  assert.equal(linked.nativeFragments.length, 1);
+  assert.throws(() => compileLinkedProject(linked), /Missing portable Lino intrinsics/);
+  const id = linked.nativeFragments[0].id;
+  const program = compileLinkedProject(linked, {}, {
+    intrinsics: { [id](machine) { machine.A = 42; } },
+  });
+  assert.equal(program.run(5).status, "halted");
+  assert.equal(program.machine.A, 42);
 });

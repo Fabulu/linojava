@@ -11,6 +11,21 @@ function location(item, message) {
   return new SyntaxError(`${item.sourceId}:${item.line}: ${message}: ${item.text}`);
 }
 
+function fnv1a(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function nativeIntrinsicId(item) {
+  const module = String(item.sourceId).replaceAll("\\", "/").split("/").at(-1).toLowerCase();
+  const body = item.text.replace(/[\x00-\x20]+/g, " ").trim().toLowerCase();
+  return `native:${module}:${fnv1a(body)}`;
+}
+
 export function canonicalCodeName(value) {
   return canonicalName(String(value).replace(/^(?:shared|service)\s+/i, ""));
 }
@@ -85,7 +100,19 @@ export function parseProgrammeStatement(item) {
   const text = item.text.trim();
   const lower = text.toLowerCase();
   if (text.includes("{") || text.includes("}")) {
-    throw location(item, "Native programme fragment needs a portable intrinsic");
+    if (!text.startsWith("{")) {
+      throw location(item, "Malformed native programme fragment");
+    }
+    const closing = text.lastIndexOf("}");
+    if (closing < 0) throw location(item, "Malformed native programme fragment");
+    const body = text.slice(0, closing + 1);
+    const intrinsic = { op: "intrinsic", intrinsicId: nativeIntrinsicId({ ...item, text: body }), body };
+    const trailing = text.slice(closing + 1).trim();
+    if (!trailing) return intrinsic;
+    return {
+      op: "sequence",
+      instructions: [intrinsic, parseProgrammeStatement({ ...item, text: trailing })],
+    };
   }
   if (TERMINATORS.has(lower)) return { op: lower };
   if (text === "---->") return { op: "push-all" };
@@ -135,6 +162,8 @@ export function collectProgramme(project) {
           continue;
         }
         if (item.type !== "statement") continue;
+        const parsed = parseProgrammeStatement(item);
+        const emitted = parsed.op === "sequence" ? parsed.instructions : [parsed];
         const index = instructions.length;
         for (const label of pendingLabels) {
           if (labels.has(label.canonicalName)) {
@@ -144,14 +173,16 @@ export function collectProgramme(project) {
           aliases.push({ ...label, instruction: index });
         }
         pendingLabels = [];
-        instructions.push({
-          ...parseProgrammeStatement(item),
-          index,
-          sourceId: item.sourceId,
-          line: item.line,
-          text: item.text,
-          moduleId: module.id,
-        });
+        for (const operation of emitted) {
+          instructions.push({
+            ...operation,
+            index: instructions.length,
+            sourceId: item.sourceId,
+            line: item.line,
+            text: operation.body ?? item.text,
+            moduleId: module.id,
+          });
+        }
       }
     }
     if (pendingLabels.length) {

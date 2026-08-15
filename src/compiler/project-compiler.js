@@ -138,6 +138,7 @@ function emitInstruction(instruction) {
     case "branch-status": return `case ${instruction.index}: { pc = (X === ${instruction.status === "ok" ? DONE : FAIL}) ? ((${expression(instruction.target)}) - 1) : ${next}; break; }`;
     case "loop": code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`); return `case ${instruction.index}: { ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; break; }`;
     case "isocall": return `case ${instruction.index}: { pc = ${next}; sync(); const result = dispatch(machine); X = result?.status === ${FAIL} || result?.success === false ? ${FAIL} : ${DONE}; if (result?.yielded || result?.yield) return save("yield", executed); break; }`;
+    case "intrinsic": return `case ${instruction.index}: { sync(); native(${JSON.stringify(instruction.intrinsicId)}, machine); m=machine.memory; s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; break; }`;
     case "end": return `case ${instruction.index}: { ${returnInstruction(DONE, instruction.index)} }`;
     case "fail": return `case ${instruction.index}: { ${returnInstruction(FAIL, instruction.index)} }`;
     case "leave": return `case ${instruction.index}: { ${returnInstruction(null, instruction.index)} }`;
@@ -178,10 +179,21 @@ export function emitRunner(linked) {
   `;
 }
 
-export function compileLinkedProject(linked, host = {}) {
+export function compileLinkedProject(linked, host = {}, options = {}) {
+  const implementations = { ...(linked.intrinsics ?? {}), ...(options.intrinsics ?? {}), ...(host.intrinsics ?? {}) };
+  const missing = linked.nativeFragments?.filter((fragment) => typeof implementations[fragment.id] !== "function") ?? [];
+  if (missing.length && !options.allowMissingIntrinsics) {
+    const examples = missing.slice(0, 12).map((fragment) => `${fragment.id} at ${fragment.sourceId}:${fragment.line}`).join("; ");
+    throw new Error(`Missing portable Lino intrinsics (${missing.length} fragments, ${new Set(missing.map((item) => item.id)).size} unique): ${examples}`);
+  }
   const dispatch = (machine) => host.isocall?.(machine, linked)
     ?? dispatchIsoKernel(machine.memory, host, { kernelBase: linked.memoryLayout.kernelBase });
-  const runner = new Function("dispatch", emitRunner(linked))(dispatch);
+  const native = (id, machine) => {
+    const implementation = implementations[id];
+    if (typeof implementation !== "function") throw new Error(`Missing portable Lino intrinsic ${id}`);
+    return implementation(machine, linked);
+  };
+  const runner = new Function("dispatch", "native", emitRunner(linked))(dispatch, native);
   const machine = {
     memory: new Int32Array(linked.initialMemory),
     stack: new Int32Array(1024), depth: 0,
@@ -204,5 +216,5 @@ export async function compileProject(entry, resolvers, options = {}) {
   const linked = linkProject(project, options);
   const host = { ...(options.host ?? {}) };
   if (host.stockfile === undefined && host.stockFile === undefined) host.stockfile = linked.stockfile;
-  return compileLinkedProject(linked, host);
+  return compileLinkedProject(linked, host, options);
 }
