@@ -64,9 +64,9 @@ The current Noctis closure loads 73 modules and lowers to 56,945 JavaScript
 instructions. All ordinary statements now parse, including unsigned apostrophe
 arithmetic and float predicates. Its 204 embedded native fragments are explicit
 intrinsics rather than hidden interpreter operations. Portable implementations
-now cover 11 exact integer, framebuffer, page-memory, and scaling kernels. The
-remaining 193 occurrences are rejected until their JavaScript implementations
-are added.
+now cover 28 exact integer, framebuffer, page-memory, raster, and scaling
+kernels. The remaining 176 occurrences are rejected until their JavaScript
+implementations are added.
 
 ## Project boundaries
 

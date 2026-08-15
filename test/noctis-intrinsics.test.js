@@ -10,7 +10,13 @@ function fixture() {
     "VHGUIsrc", "VHGUIpal", "VHGUIdst", "VHGUIrow2", "VHGUIdstp",
     "VHGUIrow2p", "VHGUIgap", "VHGUIdw", "VHGUIdh", "VHGUIsy",
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
-    "VHTcyclebase",
+    "VHTcyclebase", "nw",
+    "VHTsmoothbase", "SPcpfrom", "SPcpto", "PVj", "SCcx", "SCdi",
+    "SCal", "SCzf", "DBal", "CSbyte", "SGpi", "SGpf", "SGgx", "SGgy",
+    "SGa", "SGb", "SGt", "DBdi", "DBcx", "DBdl",
+    "EWminy", "EWmaxy", "PGfpartbase", "PGipartbase", "PGi", "PGnwbase",
+    "RPBG", "SPdi", "SPax", "SPdx", "SPcl", "SPbp", "SPsi", "PGtexoff",
+    "SPtinta", "SPn", "FCW",
   ];
   const symbols = new Map(names.map((name, index) => [
     canonicalName(name),
@@ -36,6 +42,7 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   const { linked, machine, at } = fixture();
   const memory = machine.memory;
   const run = (id) => intrinsic[id](machine, linked);
+  linked.symbols.get(canonicalName("nw")).value = 0;
 
   memory[at("UAFsrc")] = 100;
   memory[at("UAFdst")] = 102;
@@ -105,4 +112,135 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   run(IDS.cycleStarTexture);
   assert.equal(memory[1_000_000], 0x40);
   assert.equal(memory[1_000_000 + 64_799], 0xc1);
+
+  memory[at("SPcpfrom")] = 1_100_000;
+  memory[at("SPcpto")] = 1_100_002;
+  memory[at("PVj")] = 4;
+  memory.set([8, 9, 10, 11], 1_100_000);
+  run(IDS.copyPlanetView);
+  assert.deepEqual([...memory.slice(1_100_002, 1_100_006)], [8, 9, 8, 9]);
+
+  memory[at("VHTsmoothbase")] = 1_200_000;
+  memory.fill(4, 1_200_000, 1_200_000 + 58_000);
+  run(IDS.smoothStarPage);
+  assert.equal(memory[1_200_320], 4);
+  assert.equal(memory[1_200_321], 5);
+
+  linked.symbols.get(canonicalName("SADPT")).value = 1_300_000;
+  memory.set([1, 2, 3, 3], 1_300_010);
+  memory[at("SCdi")] = 10;
+  memory[at("SCcx")] = 4;
+  memory[at("SCal")] = 3;
+  run(IDS.scanNotEqual);
+  assert.equal(memory[at("SCdi")], 13);
+  assert.equal(memory[at("SCcx")], 1);
+  assert.equal(memory[at("SCzf")], 1);
+  assert.equal(memory[at("PGdi")], 12);
+
+  memory[at("SCdi")] = 12;
+  memory[at("SCcx")] = 2;
+  run(IDS.scanEqual);
+  assert.equal(memory[at("SCdi")], 14);
+  assert.equal(memory[at("SCcx")], 0);
+  assert.equal(memory[at("SCzf")], 1);
+
+  memory[at("SCdi")] = 0xffff;
+  memory[at("SCcx")] = 2;
+  memory[at("DBal")] = 0x1aa;
+  run(IDS.fillBytes);
+  assert.equal(memory[1_300_000 + 0xffff], 0xaa);
+  assert.equal(memory[1_300_000], 0xaa);
+  assert.equal(memory[at("SCdi")], 1);
+  assert.equal(memory[at("PGdi")], 0);
+
+  memory[at("SGpi")] = 5;
+  memory[at("SGpf")] = 646;
+  run(IDS.traceVertical);
+  assert.equal(memory[1_300_005], 0xff);
+  assert.equal(memory[1_300_325], 0xff);
+  assert.equal(memory[1_300_645], 0xff);
+  assert.equal(memory[at("SGpi")], 965);
+
+  memory[at("DBdi")] = 1000;
+  memory[at("DBcx")] = 2;
+  memory[at("DBdl")] = 10;
+  memory[1_300_999] = 60;
+  run(IDS.fillFlare);
+  assert.deepEqual([...memory.slice(1_301_000, 1_301_002)], [62, 62]);
+
+  memory[at("DBdi")] = 2000;
+  memory[at("DBcx")] = 2;
+  memory[1_302_000] = 0xff;
+  memory[1_302_001] = 4;
+  memory[1_301_679] = 7;
+  run(IDS.fillHalo);
+  assert.equal(memory[1_302_000], 0x47);
+  assert.equal(memory[1_302_001], 0x45);
+
+  memory[at("DBdi")] = 3000;
+  memory[at("DBcx")] = 1;
+  memory[1_302_679] = 0xff;
+  memory[1_302_358] = 9;
+  run(IDS.fillHaloFallback);
+  assert.equal(memory[1_303_000], 0x49);
+
+  memory[at("EWminy")] = 2;
+  memory[at("EWmaxy")] = 3;
+  memory[at("PGfpartbase")] = 1_500_000;
+  memory[at("PGipartbase")] = 1_500_100;
+  run(IDS.initializePolygonRows);
+  assert.deepEqual([...memory.slice(1_500_002, 1_500_004)], [5, 5]);
+  assert.deepEqual([...memory.slice(1_500_102, 1_500_104)], [311, 311]);
+  assert.equal(memory[at("PGi")], 4);
+
+  linked.symbols.get(canonicalName("RPBG")).value = 100;
+  linked.symbols.get(canonicalName("SADPT")).value = 1000;
+  memory[at("PGnwbase")] = 1_400_000;
+  memory[at("SPdi")] = 0;
+  memory[at("SPax")] = 0x0100;
+  memory[at("SPdx")] = 0x0200;
+  memory[at("SPcl")] = 2;
+  memory[at("SPbp")] = 0x0100;
+  memory[at("SPsi")] = 0;
+  memory[at("PGtexoff")] = 0;
+  memory[at("SPtinta")] = 5;
+  memory[1_400_100 + 0x0201] = 10;
+  memory[1_400_100 + 0x0202] = 20;
+  run(IDS.terrainPixelBlock);
+  assert.deepEqual([...memory.slice(1_401_004, 1_401_006)], [15, 25]);
+  assert.equal(memory[at("SPdi")], 2);
+  assert.equal(memory[at("SPax")], 0x0300);
+
+  memory[at("SPdi")] = 10;
+  memory[at("SPax")] = 0x0100;
+  memory[at("SPdx")] = 0x0200;
+  memory[at("SPcl")] = 1;
+  run(IDS.terrainCullPixelBlock);
+  assert.deepEqual([...memory.slice(1_401_014, 1_401_016)], [15, 15]);
+
+  memory[at("SPdi")] = 20;
+  memory[at("SPax")] = 0x0100;
+  memory[at("SPdx")] = 0x0200;
+  memory[1_401_024] = 250;
+  run(IDS.transparentPixel);
+  assert.equal(memory[1_401_024], 4);
+
+  memory[at("SPdi")] = 30;
+  memory[at("SPax")] = 0x0100;
+  memory[at("SPdx")] = 0x0200;
+  memory[1_401_035] = 250;
+  run(IDS.transparentCullPixel);
+  assert.deepEqual([...memory.slice(1_401_034, 1_401_036)], [4, 4]);
+
+  memory[at("SPdi")] = 400;
+  memory[at("SPn")] = 2;
+  memory[1_401_084] = 12;
+  memory[1_401_085] = 13;
+  run(IDS.duplicateHalfScan);
+  assert.deepEqual([...memory.slice(1_401_404, 1_401_406)], [12, 13]);
+  assert.deepEqual([...memory.slice(1_401_724, 1_401_726)], [12, 13]);
+
+  memory[at("FCW")] = 0x137f;
+  run(IDS.resetFloatingPoint);
+  assert.deepEqual(machine.fpu, { control: 0x137f, stack: [] });
 });
