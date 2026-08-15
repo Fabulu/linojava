@@ -38,11 +38,21 @@ for browser persistence.
 - integer load/store, assignment, add, subtract, multiply, divide, AND, OR
 - labels, signed comparisons, jumps, calls, `leave`, `end`, and `isocall`
 - block-level compilation with explicit 32-bit wrapping
+- period-aware source lexing with nested comments and braced data
+- recursive library and stockfile project loading through resolver callbacks
 
 Unsupported syntax fails at compile time. In particular, embedded native x86
 byte fragments are never ignored or approximated. Noctis currently uses those
 fragments heavily, so the browser port will provide portable intrinsic forms
 for each one before claiming game compatibility.
+
+The project loader already resolves the unmodified `examples/iGUIcli.txt`
+source graph from the Linoleum tree: 14 modules, 23 stockfile assets, and 7,200
+statements. Module identity follows Lino's case-insensitive naming, so `Region`
+and `region` resolve to one library. The next frontend stage links those periods
+and declarations into the executable JavaScript IR; loading the graph alone is
+not yet an iGUI boot. Custom resolvers may provide `moduleIdentity` and
+`stockfileIdentity` functions when their storage has different alias rules.
 
 ## Project boundaries
 

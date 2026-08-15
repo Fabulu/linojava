@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/compiler.js",
     "./browser": "./src/browser.js",
-    "./auto": "./src/auto.js"
+    "./auto": "./src/auto.js",
+    "./project": "./src/compiler/project-loader.js"
   },
   "scripts": {
     "build:demo": "node ./bin/linojava.js ./examples/browser_probe.lino ./examples/browser_probe.js",

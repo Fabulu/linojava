@@ -94,3 +94,17 @@ test("source elements resolve external src against document.baseURI", async () =
   }
   assert.deepEqual(requested, ["https://example.test/games/game.lino"]);
 });
+
+test("blocked browser storage falls back to uncached compilation", async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  globalThis.indexedDB = { open() { throw new Error("storage blocked"); } };
+  try {
+    await withNodeModuleUrlShim(async () => {
+      const result = await createProgramFromSource(source);
+      assert.equal(result.cached, false);
+      assert.equal(result.program.step().status, "halted");
+    });
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});

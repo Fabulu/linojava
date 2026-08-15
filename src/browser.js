@@ -30,7 +30,13 @@ async function sourceKey(source, options) {
 function openCache() {
   if (!globalThis.indexedDB) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const request = globalThis.indexedDB.open(CACHE_DATABASE, CACHE_VERSION);
+    let request;
+    try {
+      request = globalThis.indexedDB.open(CACHE_DATABASE, CACHE_VERSION);
+    } catch {
+      resolve(null);
+      return;
+    }
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(CACHE_STORE)) {
         request.result.createObjectStore(CACHE_STORE);

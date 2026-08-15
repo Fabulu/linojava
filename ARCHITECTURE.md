@@ -93,3 +93,8 @@ GUI` through the first RETRACE; present deterministic Lino-drawn chrome; and
 accept a mapped pointer click that changes the Lino framebuffer. Analysis of
 the full Noctis entry must enumerate every unresolved intrinsic instead of
 stopping at the first native fragment.
+
+The first loader milestone is complete: the period-aware lexer and recursive
+resolver load the real iGUI client closure, including all 14 source modules and
+23 stockfile assets. Declaration linking, executable IR construction, and the
+IsoKernel host remain before that graph can draw its first frame.
