@@ -174,6 +174,35 @@ const IDS = Object.freeze({
   groundCraterPower: "native:grnd.txt:f3a87253",
   groundSubtractLimit: "native:grnd.txt:d1359547",
   groundLimitFloat: "native:grnd.txt:df1c1afa",
+  landedRotationSeed: "native:vhground.txt:c4919f1f",
+  landedHeightLower: "native:vhground.txt:4d21b85f",
+  landedHeightUpper: "native:vhground.txt:29bbf0b7",
+  landedHeightChop: "native:vhground.txt:b9772476",
+  landedDenseAverage: "native:vhground.txt:53e9c934",
+  landedMushroomPixels: "native:vhground.txt:e9d6d62d",
+  landedMushroomPoint: "native:vhground.txt:47b7d3b0",
+  landedMushroomSetup: "native:vhground.txt:5c4c6d3b",
+  landedTreePeakDouble: "native:vhground.txt:ef41325d",
+  landedTreePeakHalf: "native:vhground.txt:9df2c41b",
+  landedTreeScaleDouble: "native:vhground.txt:d7f16abe",
+  landedTreeGiantWidths: "native:vhground.txt:cdc20999",
+  landedTreeSeedSum: "native:vhground.txt:4e79aaea",
+  landedTreeRootRange: "native:vhground.txt:1a457500",
+  landedTreeChildRange: "native:vhground.txt:79db15c1",
+  landedTreeEndpoint: "native:vhground.txt:ae9ab03a",
+  landedTreeEndpointPi: "native:vhground.txt:2a4f9481",
+  landedTreeRootHeight: "native:vhground.txt:aac8ca5c",
+  landedTreeChildHeight: "native:vhground.txt:b52de3d2",
+  landedTreeRadii: "native:vhground.txt:7bb56480",
+  landedTreeTerminal: "native:vhground.txt:668a4145",
+  landedTreeNodeLoad: "native:vhground.txt:a2786c62",
+  landedTreeDirection: "native:vhground.txt:19798700",
+  landedTreeLeafVertex: "native:vhground.txt:479c6766",
+  landedTreePolarVertex: "native:vhground.txt:8c5daa7f",
+  landedTileDistance: "native:vhground.txt:018fc2d6",
+  landedTileAdmission: "native:vhground.txt:91bdffee",
+  landedTerrainTriangle: "native:vhground.txt:64088193",
+  landedVertexLoad: "native:vhground.txt:9bc55759",
 });
 
 const SERVICE_IDS = Object.freeze({
@@ -2031,6 +2060,554 @@ function groundLimitFloat(machine, linked) {
   groundStoreFloat(machine, linked, "GRfy", value(machine.memory, linked, "GRfscl"));
 }
 
+function landedFastRandom(machine, linked, mask) {
+  const memory = machine.memory;
+  const seed = value(memory, linked, "SUfseed") >>> 0;
+  const product = BigInt(seed) * BigInt(seed);
+  const low = Number(product & 0xffffffffn) | 0;
+  const high = Number((product >> 32n) & 0xffffffffn) | 0;
+  const raw = (low & 0xffffff00) | (((low & 0xff) + (high & 0xff)) & 0xff);
+  const nextSeed = (seed + (raw >>> 0)) | 0;
+  const result = raw & mask;
+  memory[address(linked, "SUfeax")] = raw;
+  memory[address(linked, "SUfseed")] = nextSeed;
+  memory[address(linked, "SUfval")] = result;
+  machine.A = raw;
+  machine.B = nextSeed;
+  machine.C = result;
+  machine.D = high;
+  return result;
+}
+
+function landedRotationSeed(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = readFloat64(memory, address(linked, "VHGNDsf00"));
+  for (const name of ["VHGNDsf10", "VHGNDsf20", "VHGNDsf30", "VHGNDsf40", "VHGNDsf50"]) {
+    result = scalarBinaryNumber(
+      result,
+      readFloat64(memory, address(linked, name)),
+      control,
+      "multiply",
+    );
+  }
+  writeFloat64(memory, address(linked, "VHGNDseedval0"), result);
+}
+
+function landedHeightTriangle(machine, linked, upper) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const inverse = readFloat64(memory, address(linked, "FB0"));
+  const firstPosition = upper ? value(memory, linked, "VHGNDfx") : 16384 - value(memory, linked, "VHGNDfx");
+  let factor = scalarBinaryNumber(firstPosition, inverse, control, "multiply");
+  writeFloat64(memory, address(linked, "FT0"), factor);
+  const firstBase = value(memory, linked, upper ? "VHGNDh1i" : "VHGNDh3i");
+  let height = scalarBinaryNumber(
+    value(memory, linked, upper ? "VHGNDh2i" : "VHGNDh4i") - firstBase,
+    factor,
+    control,
+    "multiply",
+  );
+  height = scalarBinaryNumber(height, firstBase, control, "add");
+  height = groundStoreFloat(machine, linked, "VHGNDpy", height);
+
+  const secondPosition = upper ? value(memory, linked, "VHGNDfz") : 16384 - value(memory, linked, "VHGNDfz");
+  factor = scalarBinaryNumber(secondPosition, inverse, control, "multiply");
+  writeFloat64(memory, address(linked, "FT0"), factor);
+  const secondBase = value(memory, linked, upper ? "VHGNDh1i" : "VHGNDh3i");
+  let addition = scalarBinaryNumber(
+    value(memory, linked, upper ? "VHGNDh4i" : "VHGNDh2i") - secondBase,
+    factor,
+    control,
+    "multiply",
+  );
+  addition = scalarBinaryNumber(addition, height, control, "add");
+  groundStoreFloat(machine, linked, "VHGNDpy", addition);
+}
+
+function landedHeightChop(machine, linked) {
+  const memory = machine.memory;
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "GRcwc") & 0xffff;
+  memory[address(linked, "FI")] = convertToInt32(
+    readNamedFloat32(memory, linked, "VHGNDpy"),
+    fpu.control,
+  );
+  fpu.control = value(memory, linked, "GRcwn") & 0xffff;
+}
+
+function landedDenseAverage(machine, linked) {
+  const memory = machine.memory;
+  const base = value(memory, linked, "VHGNDdensebase") >>> 0;
+  const index = value(memory, linked, "SUsi") | 0;
+  let total = 0;
+  for (const row of [-320, 0, 320, 640]) {
+    for (let column = 0; column < 4; column += 1) {
+      total += memory[base + index + row + column] & 0xff;
+    }
+  }
+  memory[base + index] = total >>> 4;
+}
+
+function landedMushroomPixels(machine, linked) {
+  const memory = machine.memory;
+  const page = address(linked, "RADPT");
+  let remaining = value(memory, linked, "VHGNDmushinner") >>> 0;
+  const colorMask = value(memory, linked, "VHGNDmushcolmask");
+  while (remaining !== 0) {
+    const y = value(memory, linked, "GCy") + landedFastRandom(machine, linked, 7);
+    const x = value(memory, linked, "GCx") + landedFastRandom(machine, linked, 7);
+    const offset = Math.imul(y, 320) + x;
+    memory[address(linked, "VHGNDmushoff")] = offset;
+    const color = landedFastRandom(machine, linked, colorMask) + value(memory, linked, "VHGNDmushbase");
+    for (const displacement of [0, 1, -1, 320, -320, -640]) {
+      memory[page + offset + displacement] = color;
+    }
+    remaining -= 1;
+  }
+  memory[address(linked, "VHGNDmushinner")] = 0;
+  machine.A = 0;
+}
+
+function landedMushroomPoint(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const mask = value(memory, linked, "VHGNDmushscale");
+  for (const [source, destination, slot] of [
+    ["VHGNDmushzf", "VHGNDmushpzf", 520],
+    ["VHGNDmushyf", "VHGNDmushpyf", 512],
+    ["VHGNDmushxf", "VHGNDmushpxf", 504],
+  ]) {
+    const random = landedFastRandom(machine, linked, mask);
+    writeFloat64(memory, address(linked, "FB0"), random);
+    let result = scalarBinaryNumber(
+      readNamedFloat32(memory, linked, source),
+      random,
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, result);
+    result = groundStoreFloat(machine, linked, destination, result);
+    writeFloat64(memory, floats + slot, result);
+  }
+}
+
+function landedMushroomSetup(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const addend = value(memory, linked, "VHGNDtmp");
+  for (const name of ["VHGNDmushxf", "VHGNDmushyf", "VHGNDmushzf"]) {
+    writeFloat64(memory, address(linked, "FB0"), readNamedFloat32(memory, linked, name));
+    writeScalarScratch(machine, linked, addend);
+    let result = scalarBinaryNumber(addend, readNamedFloat32(memory, linked, name), control, "add");
+    writeScalarScratch(machine, linked, result);
+    result = groundStoreFloat(machine, linked, name, result);
+    writeScalarScratch(machine, linked, result);
+  }
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "GRcwc") & 0xffff;
+  for (const [source, destination] of [
+    ["VHGNDmushxf", "VHGNDmushx"],
+    ["VHGNDmushyf", "VHGNDmushy"],
+    ["VHGNDmushzf", "VHGNDmushz"],
+  ]) memory[address(linked, destination)] = convertToInt32(readNamedFloat32(memory, linked, source), fpu.control);
+  memory[address(linked, "PGFt")] = value(memory, linked, "VHGNDmushzf");
+  fpu.control = value(memory, linked, "GRcwn") & 0xffff;
+  writeScalarScratch(machine, linked, readNamedFloat32(memory, linked, "VHGNDmushzf"));
+}
+
+function landedFloatMultiply(machine, linked, left, right, destination, extra = null) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, left),
+    typeof right === "number" ? right : readNamedFloat32(memory, linked, right),
+    control,
+    "multiply",
+  );
+  if (extra) result = scalarBinaryNumber(
+    result,
+    readFloat64(memory, address(linked, extra)),
+    control,
+    "multiply",
+  );
+  groundStoreFloat(machine, linked, destination, result);
+}
+
+function landedTreeGiantWidths(machine, linked) {
+  const multiplier = value(machine.memory, linked, "GRtreeci");
+  const half = readFloat64(machine.memory, address(linked, "GRK050L"));
+  for (const [source, destination] of [
+    ["GRbranchwidthf", "VHTwidthf"],
+    ["GRtreepeakf", "VHTpeakf"],
+  ]) {
+    const first = scalarBinaryNumber(
+      readNamedFloat32(machine.memory, linked, source),
+      multiplier,
+      floatingPoint(machine).control,
+      "multiply",
+    );
+    groundStoreFloat(machine, linked, destination, scalarBinaryNumber(
+      first, half, floatingPoint(machine).control, "multiply",
+    ));
+  }
+}
+
+function landedTreeSeedSum(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreebxf"),
+    readNamedFloat32(memory, linked, "VHGNDtreebyf"),
+    control,
+    "add",
+  );
+  result = scalarBinaryNumber(result, readNamedFloat32(memory, linked, "VHGNDtreebzf"), control, "add");
+  result = scalarBinaryNumber(result, value(memory, linked, "VHGNDh1"), control, "add");
+  writeScalarScratch(machine, linked, result);
+}
+
+function landedTreeRange(machine, linked, factorName) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreescalef"),
+    readNamedFloat32(memory, linked, "VHTpeakf"),
+    control,
+    "multiply",
+  );
+  result = scalarBinaryNumber(
+    result,
+    readFloat64(memory, address(linked, factorName)),
+    control,
+    "multiply",
+  );
+  groundStoreFloat(machine, linked, "VHGNDtreerangef", result);
+}
+
+function landedTreeEndpoint(machine, linked) {
+  const memory = machine.memory;
+  const angle = readNamedFloat32(memory, linked, "VHGNDtreeangle");
+  const range = readNamedFloat32(memory, linked, "VHGNDtreerangef");
+  groundStoreFloat(machine, linked, "VHGNDtreeexf", scalarBinaryNumber(
+    scalarBinaryNumber(Math.cos(angle), range, floatingPoint(machine).control, "multiply"),
+    readNamedFloat32(memory, linked, "VHGNDtreebxf"),
+    floatingPoint(machine).control,
+    "add",
+  ));
+  groundStoreFloat(machine, linked, "VHGNDtreeezf", scalarBinaryNumber(
+    scalarBinaryNumber(Math.sin(angle), range, floatingPoint(machine).control, "multiply"),
+    readNamedFloat32(memory, linked, "VHGNDtreebzf"),
+    floatingPoint(machine).control,
+    "add",
+  ));
+}
+
+function landedTreeEndpointPi(machine, linked) {
+  const memory = machine.memory;
+  groundStoreFloat(machine, linked, "VHGNDtreeexf", scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreebxf"),
+    readNamedFloat32(memory, linked, "VHGNDtreerangef"),
+    floatingPoint(machine).control,
+    "subtract",
+  ));
+}
+
+function landedTreeHeight(machine, linked, root) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let offset;
+  if (root) {
+    offset = scalarBinaryNumber(
+      readNamedFloat32(memory, linked, "GRtreefl"),
+      readNamedFloat32(memory, linked, "GRrootheightf"),
+      control,
+      "multiply",
+    );
+    offset = scalarBinaryNumber(offset, readFloat64(memory, address(linked, "GRK010L")), control, "add");
+    offset = scalarBinaryNumber(offset, readNamedFloat32(memory, linked, "VHGNDtreescalef"), control, "multiply");
+  } else {
+    offset = scalarBinaryNumber(
+      readNamedFloat32(memory, linked, "GRtreefl"),
+      readFloat64(memory, address(linked, "GRK025L")),
+      control,
+      "add",
+    );
+    offset = scalarBinaryNumber(offset, readNamedFloat32(memory, linked, "VHGNDtreescalef"), control, "multiply");
+    offset = scalarBinaryNumber(offset, readFloat64(memory, address(linked, "GRK025L")), control, "multiply");
+  }
+  groundStoreFloat(machine, linked, "VHGNDtreeeyf", scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreebyf"),
+    offset,
+    control,
+    "subtract",
+  ));
+}
+
+function landedTreeRadii(machine, linked) {
+  landedFloatMultiply(machine, linked, "VHGNDtreescalef", "VHTreducf", "VHTnextscf");
+  landedFloatMultiply(machine, linked, "VHGNDtreescalef", "VHTwidthf", "VHGNDtreebr");
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHTreducf"),
+    readNamedFloat32(memory, linked, "VHGNDtreescalef"),
+    control,
+    "multiply",
+  );
+  result = scalarBinaryNumber(result, readNamedFloat32(memory, linked, "VHTwidthf"), control, "multiply");
+  groundStoreFloat(machine, linked, "VHGNDtreeer", result);
+}
+
+function landedTreeTerminal(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const randomFloat = () => {
+    const random = landedFastRandom(machine, linked, 32767);
+    memory[address(linked, "GRtreeci")] = random;
+    const result = scalarBinaryNumber(
+      random,
+      readFloat64(memory, address(linked, "GRKFL0")),
+      control,
+      "multiply",
+    );
+    groundStoreFloat(machine, linked, "GRtreefl", result);
+    return result;
+  };
+  let delta = scalarBinaryNumber(
+    randomFloat(), readNamedFloat32(memory, linked, "VHGNDtreerangef"), control, "multiply",
+  );
+  writeScalarScratch(machine, linked, delta);
+  let accumulator = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreebxf"), delta, control, "add",
+  );
+  writeFloat64(memory, address(linked, "GRtreeacc0"), accumulator);
+  delta = scalarBinaryNumber(
+    randomFloat(), readNamedFloat32(memory, linked, "VHGNDtreerangef"), control, "multiply",
+  );
+  writeScalarScratch(machine, linked, delta);
+  groundStoreFloat(machine, linked, "VHGNDtreeleafx", scalarBinaryNumber(
+    accumulator, delta, control, "subtract",
+  ));
+
+  delta = scalarBinaryNumber(
+    randomFloat(), readNamedFloat32(memory, linked, "VHGNDtreerangef"), control, "multiply",
+  );
+  writeScalarScratch(machine, linked, delta);
+  accumulator = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreebzf"), delta, control, "add",
+  );
+  writeFloat64(memory, address(linked, "GRtreeacc0"), accumulator);
+  delta = scalarBinaryNumber(
+    randomFloat(), readNamedFloat32(memory, linked, "VHGNDtreerangef"), control, "multiply",
+  );
+  writeScalarScratch(machine, linked, delta);
+  groundStoreFloat(machine, linked, "VHGNDtreeleafz", scalarBinaryNumber(
+    accumulator, delta, control, "subtract",
+  ));
+
+  delta = scalarBinaryNumber(
+    randomFloat(), readNamedFloat32(memory, linked, "VHGNDtreescalef"), control, "multiply",
+  );
+  writeScalarScratch(machine, linked, delta);
+  groundStoreFloat(machine, linked, "VHGNDtreeleafdrop", scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreebyf"), delta, control, "subtract",
+  ));
+  const radius = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHGNDtreescalef"),
+    readNamedFloat32(memory, linked, "VHTwidthf"),
+    control,
+    "multiply",
+  );
+  writeScalarScratch(machine, linked, radius);
+  groundStoreFloat(machine, linked, "VHGNDtreebr", radius);
+  writeScalarScratch(machine, linked, readNamedFloat32(memory, linked, "VHGNDtreebr"));
+  memory[address(linked, "FS0")] = value(memory, linked, "VHGNDtreebr");
+}
+
+function landedTreeNodeLoad(machine, linked) {
+  const memory = machine.memory;
+  const level = value(memory, linked, "VHGNDtreelevel") >>> 0;
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "GRcwc") & 0xffff;
+  for (const [stackName, floatName, integerName] of [
+    ["VHGNDtsx", "VHGNDtreebxf", "VHGNDtreebx"],
+    ["VHGNDtsy", "VHGNDtreebyf", "VHGNDtreeby"],
+    ["VHGNDtsz", "VHGNDtreebzf", "VHGNDtreebz"],
+    ["VHGNDtsscale", "VHGNDtreescalef", "VHGNDtreescale"],
+  ]) {
+    const bits = memory[address(linked, stackName) + level] | 0;
+    memory[address(linked, floatName)] = bits;
+    memory[address(linked, integerName)] = convertToInt32(float32FromBits(bits), fpu.control);
+    if (floatName === "VHGNDtreescalef") memory[address(linked, "PGFt")] = bits;
+  }
+  fpu.control = value(memory, linked, "GRcwn") & 0xffff;
+  writeScalarScratch(machine, linked, readNamedFloat32(memory, linked, "VHGNDtreescalef"));
+  for (const [stackName, destination] of [
+    ["VHGNDtslayers", "VHGNDtreelayers"],
+    ["VHGNDtsroot", "VHGNDtreeisroot"],
+    ["VHGNDtsocc", "VHGNDtreeocc"],
+  ]) memory[address(linked, destination)] = memory[address(linked, stackName) + level];
+}
+
+function landedTreeDirection(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  memory[address(linked, "PGFt")] = 0x40c90fdb;
+  const circle = float32FromBits(0x40c90fdb);
+  writeFloat64(memory, address(linked, "fw") + 496, circle);
+  let step = scalarBinaryNumber(
+    circle,
+    value(memory, linked, "VHGNDtreebranches"),
+    control,
+    "divide",
+  );
+  writeScalarScratch(machine, linked, step);
+  step = groundStoreFloat(machine, linked, "VHGNDtmp", step);
+  memory[address(linked, "PGFt")] = value(memory, linked, "VHGNDtmp");
+  let angle = scalarBinaryNumber(
+    step,
+    readFloat64(memory, address(linked, "GRK050L")),
+    control,
+    "multiply",
+  );
+  writeScalarScratch(machine, linked, angle);
+  angle = groundStoreFloat(machine, linked, "VHGNDtreeangle", angle);
+  let index = 0;
+  const branch = value(memory, linked, "VHGNDtreebranch") >>> 0;
+  while (index < branch) {
+    writeFloat64(memory, address(linked, "fw") + 496, angle);
+    writeFloat64(memory, address(linked, "fw") + 498, step);
+    angle = scalarBinaryNumber(angle, step, control, "add");
+    writeScalarScratch(machine, linked, angle);
+    angle = groundStoreFloat(machine, linked, "VHGNDtreeangle", angle);
+    index += 1;
+  }
+  memory[address(linked, "VHGNDvi")] = index;
+}
+
+function landedTreeVertex(machine, linked, leaf) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const index = value(memory, linked, "VHGNDvi") >>> 0;
+  const range = readNamedFloat32(memory, linked, leaf ? "VHGNDtreerangef" : "VHGNDtreerad");
+  const centerX = readNamedFloat32(memory, linked, leaf ? "VHGNDtreeleafx" : "VHGNDtreecx");
+  const centerZ = readNamedFloat32(memory, linked, leaf ? "VHGNDtreeleafz" : "VHGNDtreecz");
+  let x = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHVcos"), range, control, "multiply",
+  );
+  writeScalarScratch(machine, linked, x);
+  x = scalarBinaryNumber(centerX, x, control, "add");
+  writeScalarScratch(machine, linked, x);
+  if (leaf) x = scalarBinaryNumber(
+    x, readNamedFloat32(memory, linked, "VHGNDtreewindx"), control, "add",
+  );
+  writeScalarScratch(machine, linked, x);
+  x = groundStoreFloat(machine, linked, "VHGNDtreepx", x);
+  let z = scalarBinaryNumber(
+    readNamedFloat32(memory, linked, "VHVsin"), range, control, "multiply",
+  );
+  writeScalarScratch(machine, linked, z);
+  z = scalarBinaryNumber(centerZ, z, control, "add");
+  writeScalarScratch(machine, linked, z);
+  if (leaf) z = scalarBinaryNumber(
+    z, readNamedFloat32(memory, linked, "VHGNDtreewindz"), control, "add",
+  );
+  writeScalarScratch(machine, linked, z);
+  z = groundStoreFloat(machine, linked, "VHGNDtreepz", z);
+  writeFloat64(memory, floats + 504 + index * 2, x);
+  writeFloat64(memory, floats + 512 + index * 2, readNamedFloat32(
+    memory, linked, leaf ? "VHGNDtreeleafdrop" : "VHGNDtreecy",
+  ));
+  writeFloat64(memory, floats + 520 + index * 2, z);
+  memory[address(linked, "VHGNDvi")] = index + 1;
+}
+
+function landedDistance(machine, linked, dx, dz) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  writeScalarScratch(machine, linked, dx);
+  const dx2 = scalarBinaryNumber(dx, dx, control, "multiply");
+  writeFloat64(memory, address(linked, "FT0"), dx2);
+  writeScalarScratch(machine, linked, dz);
+  const dz2 = scalarBinaryNumber(dz, dz, control, "multiply");
+  writeScalarScratch(machine, linked, dz2);
+  const sum = scalarBinaryNumber(dz2, dx2, control, "add");
+  writeScalarScratch(machine, linked, sum);
+  const distance = Math.sqrt(sum);
+  writeScalarScratch(machine, linked, distance);
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "GRcwc") & 0xffff;
+  memory[address(linked, "FI")] = convertToInt32(distance, fpu.control);
+  fpu.control = value(memory, linked, "GRcwn") & 0xffff;
+  return memory[address(linked, "FI")] | 0;
+}
+
+function landedTileDistance(machine, linked) {
+  landedDistance(
+    machine,
+    linked,
+    value(machine.memory, linked, "VHGNDdx"),
+    value(machine.memory, linked, "VHGNDdz"),
+  );
+}
+
+function landedTileAdmission(machine, linked) {
+  const memory = machine.memory;
+  const x = value(memory, linked, "VHGNDx");
+  const z = value(memory, linked, "VHGNDz");
+  const manhattan = Math.abs(value(memory, linked, "VHGNDcamtx") - x)
+    + Math.abs(value(memory, linked, "VHGNDcamtz") - z);
+  memory[address(linked, "VHGNDmanhattan")] = manhattan;
+  if (manhattan > 90) return;
+  memory[address(linked, "VHGNDh1")] = Math.imul(z, 200) + x;
+  const dx = value(memory, linked, "VHGNDcamx") - ((x << 14) + 8192);
+  const dz = value(memory, linked, "VHGNDcamz") - ((z << 14) + 8192);
+  memory[address(linked, "VHGNDdx")] = dx;
+  memory[address(linked, "VHGNDdz")] = dz;
+  const distance = landedDistance(machine, linked, dx, dz);
+  const raw = distance >> 14;
+  memory[address(linked, "VHGNDrawdepth")] = raw;
+  memory[address(linked, "VHGNDdepth")] = Math.max(raw - 1, 0);
+}
+
+function landedTerrainTriangle(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const x0 = value(memory, linked, "VHGNDx") << 14;
+  const z0 = value(memory, linked, "VHGNDz") << 14;
+  const step = value(memory, linked, "VHGNDlodstep") << 14;
+  const x1 = x0 + step;
+  const z1 = z0 + step;
+  const triangle = value(memory, linked, "VHGNDvctri");
+  const vertices = triangle === 0
+    ? [[x0, value(memory, linked, "VHGNDs1"), z0], [x1, value(memory, linked, "VHGNDs2"), z0], [x0, value(memory, linked, "VHGNDs4"), z1]]
+    : [[x1, value(memory, linked, "VHGNDs2"), z0], [x1, value(memory, linked, "VHGNDs3"), z1], [x0, value(memory, linked, "VHGNDs4"), z1]];
+  vertices.forEach(([x, height, z], index) => {
+    writeFloat64(memory, floats + 504 + index * 2, x);
+    writeFloat64(memory, floats + 512 + index * 2, -(height << 11));
+    writeFloat64(memory, floats + 520 + index * 2, z);
+  });
+  const finalY = readFloat64(memory, floats + 516);
+  writeScalarScratch(machine, linked, finalY);
+  memory[address(linked, "VHGNDvv")] = memory[address(linked, "FA0")];
+  memory[address(linked, "VHGNDvi")] = 2;
+  memory[address(linked, "VHGNDvslot")] = 256;
+  memory[address(linked, "PGFi")] = 258;
+}
+
+function landedVertexLoad(machine, linked) {
+  const memory = machine.memory;
+  const input = value(memory, linked, "FI");
+  writeScalarScratch(machine, linked, input);
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const slot = value(memory, linked, "VHGNDvslot") + value(memory, linked, "VHGNDvi");
+  memory[address(linked, "PGFi")] = slot;
+  writeFloat64(memory, floats + slot * 2, input);
+}
+
 function enterFloatingPoint(machine, linked) {
   const fpu = floatingPoint(machine);
   machine.memory[address(linked, "FCWSAV")] = (fpu.control | 0x40) & 0xffff;
@@ -3085,6 +3662,41 @@ export function createNoctisIntrinsics(overrides = {}) {
       machine, linked, "GRfscl", true,
     ),
     [IDS.groundLimitFloat]: groundLimitFloat,
+    [IDS.landedRotationSeed]: landedRotationSeed,
+    [IDS.landedHeightLower]: (machine, linked) => landedHeightTriangle(machine, linked, false),
+    [IDS.landedHeightUpper]: (machine, linked) => landedHeightTriangle(machine, linked, true),
+    [IDS.landedHeightChop]: landedHeightChop,
+    [IDS.landedDenseAverage]: landedDenseAverage,
+    [IDS.landedMushroomPixels]: landedMushroomPixels,
+    [IDS.landedMushroomPoint]: landedMushroomPoint,
+    [IDS.landedMushroomSetup]: landedMushroomSetup,
+    [IDS.landedTreePeakDouble]: (machine, linked) => landedFloatMultiply(
+      machine, linked, "GRtreepeakf", value(machine.memory, linked, "GRtreeci"), "VHTpeakf",
+    ),
+    [IDS.landedTreePeakHalf]: (machine, linked) => landedFloatMultiply(
+      machine, linked, "GRtreepeakf", 1, "VHTpeakf", "GRK050L",
+    ),
+    [IDS.landedTreeScaleDouble]: (machine, linked) => landedFloatMultiply(
+      machine, linked, "GRtreescalef", value(machine.memory, linked, "GRtreeci"), "VHGNDtreescalef",
+    ),
+    [IDS.landedTreeGiantWidths]: landedTreeGiantWidths,
+    [IDS.landedTreeSeedSum]: landedTreeSeedSum,
+    [IDS.landedTreeRootRange]: (machine, linked) => landedTreeRange(machine, linked, "GRK020L"),
+    [IDS.landedTreeChildRange]: (machine, linked) => landedTreeRange(machine, linked, "GRK050L"),
+    [IDS.landedTreeEndpoint]: landedTreeEndpoint,
+    [IDS.landedTreeEndpointPi]: landedTreeEndpointPi,
+    [IDS.landedTreeRootHeight]: (machine, linked) => landedTreeHeight(machine, linked, true),
+    [IDS.landedTreeChildHeight]: (machine, linked) => landedTreeHeight(machine, linked, false),
+    [IDS.landedTreeRadii]: landedTreeRadii,
+    [IDS.landedTreeTerminal]: landedTreeTerminal,
+    [IDS.landedTreeNodeLoad]: landedTreeNodeLoad,
+    [IDS.landedTreeDirection]: landedTreeDirection,
+    [IDS.landedTreeLeafVertex]: (machine, linked) => landedTreeVertex(machine, linked, true),
+    [IDS.landedTreePolarVertex]: (machine, linked) => landedTreeVertex(machine, linked, false),
+    [IDS.landedTileDistance]: landedTileDistance,
+    [IDS.landedTileAdmission]: landedTileAdmission,
+    [IDS.landedTerrainTriangle]: landedTerrainTriangle,
+    [IDS.landedVertexLoad]: landedVertexLoad,
     ...overrides,
   };
 }
