@@ -137,6 +137,13 @@ const IDS = Object.freeze({
   projectMappedPolygon: "native:pgproj.txt:88618553",
   projectMappedPoint: "native:pgproj.txt:29053a05",
   terrainFacingDot: "native:pgproj.txt:625fae20",
+  triangleMidpoint: "native:pgproj.txt:2b597e10",
+  quadMidpoint: "native:pgproj.txt:1a89cb14",
+  transformMappedVertices: "native:pgproj.txt:4a0b8716",
+  prepareTriangleVectors: "native:pgproj.txt:b24907e3",
+  prepareQuadVectors: "native:pgproj.txt:e87d653f",
+  scalePolygonBasis: "native:pgproj.txt:e133a5b8",
+  doublePolygonBasis: "native:pgproj.txt:bfa7bd64",
 });
 
 const SERVICE_IDS = Object.freeze({
@@ -1235,6 +1242,130 @@ function terrainFacingDot(machine, linked) {
   writeScalarScratch(machine, linked, sum);
 }
 
+function polygonMidpoint(machine, linked, vertices) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const factor = readFloat64(memory, address(linked, "PJthird0"));
+  for (const [source, destination] of [[64, 408], [72, 410], [80, 412]]) {
+    let sum = readFloat64(memory, floats + source);
+    for (let vertex = 1; vertex < vertices; vertex += 1) {
+      sum = scalarBinaryNumber(
+        sum,
+        readFloat64(memory, floats + source + vertex * 2),
+        control,
+        "add",
+      );
+      writeScalarScratch(machine, linked, sum);
+    }
+    sum = scalarBinaryNumber(sum, factor, control, "multiply");
+    writeScalarScratch(machine, linked, sum);
+    writeFloat64(memory, floats + destination, narrowScalar(machine, linked, sum));
+  }
+}
+
+function transformMappedVertices(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const end = value(memory, linked, "PJdx") >>> 0;
+  let vertex = value(memory, linked, "PJvr") >>> 0;
+  for (; vertex < end; vertex += 1) {
+    for (const [source, destination, midpoint, scale] of [
+      [64, 384, 408, 416],
+      [72, 392, 410, 418],
+      [80, 400, 412, 420],
+    ]) {
+      let result = scalarBinaryNumber(
+        readFloat64(memory, floats + source + vertex * 2),
+        readFloat64(memory, floats + midpoint),
+        control,
+        "subtract",
+      );
+      writeScalarScratch(machine, linked, result);
+      result = scalarBinaryNumber(
+        result,
+        readFloat64(memory, floats + scale),
+        control,
+        "multiply",
+      );
+      writeScalarScratch(machine, linked, result);
+      result = scalarBinaryNumber(
+        result,
+        readFloat64(memory, floats + midpoint),
+        control,
+        "add",
+      );
+      writeScalarScratch(machine, linked, result);
+      writeFloat64(
+        memory,
+        floats + destination + vertex * 2,
+        narrowScalar(machine, linked, result),
+      );
+    }
+  }
+  memory[address(linked, "PJvr")] = vertex;
+}
+
+function preparePolygonVectors(machine, linked, lastVertex) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  for (const [source, origin, firstEdge, secondEdge] of [
+    [384, 470, 458, 464],
+    [392, 472, 460, 466],
+    [400, 474, 462, 468],
+  ]) {
+    const first = narrowScalar(machine, linked, readFloat64(memory, floats + source));
+    writeFloat64(memory, floats + origin, first);
+    let result = scalarBinaryNumber(
+      readFloat64(memory, floats + source + 2),
+      first,
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, result);
+    writeFloat64(memory, floats + firstEdge, narrowScalar(machine, linked, result));
+    result = scalarBinaryNumber(
+      first,
+      readFloat64(memory, floats + source + lastVertex * 2),
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, result);
+    writeFloat64(memory, floats + secondEdge, narrowScalar(machine, linked, result));
+  }
+}
+
+function scalePolygonBasis(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const scale = readFloat64(memory, floats + 484);
+  for (const [source, destination] of [[6, 18], [8, 20], [10, 22]]) {
+    const result = scalarBinaryNumber(
+      readFloat64(memory, floats + source),
+      scale,
+      control,
+      "multiply",
+    );
+    writeScalarScratch(machine, linked, result);
+    writeFloat64(memory, floats + destination, narrowScalar(machine, linked, result));
+  }
+}
+
+function doublePolygonBasis(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  for (const slot of [18, 20, 22]) {
+    const input = readFloat64(memory, floats + slot);
+    const result = scalarBinaryNumber(input, input, control, "add");
+    writeScalarScratch(machine, linked, result);
+    writeFloat64(memory, floats + slot, narrowScalar(machine, linked, result));
+  }
+}
+
 function enterFloatingPoint(machine, linked) {
   const fpu = floatingPoint(machine);
   machine.memory[address(linked, "FCWSAV")] = (fpu.control | 0x40) & 0xffff;
@@ -2233,6 +2364,13 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.projectMappedPolygon]: projectMappedPolygon,
     [IDS.projectMappedPoint]: projectMappedPoint,
     [IDS.terrainFacingDot]: terrainFacingDot,
+    [IDS.triangleMidpoint]: (machine, linked) => polygonMidpoint(machine, linked, 3),
+    [IDS.quadMidpoint]: (machine, linked) => polygonMidpoint(machine, linked, 4),
+    [IDS.transformMappedVertices]: transformMappedVertices,
+    [IDS.prepareTriangleVectors]: (machine, linked) => preparePolygonVectors(machine, linked, 2),
+    [IDS.prepareQuadVectors]: (machine, linked) => preparePolygonVectors(machine, linked, 3),
+    [IDS.scalePolygonBasis]: scalePolygonBasis,
+    [IDS.doublePolygonBasis]: doublePolygonBasis,
     ...overrides,
   };
 }
