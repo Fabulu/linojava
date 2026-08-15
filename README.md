@@ -7,9 +7,15 @@ interpreter.
 The current vertical slice is an ahead-of-time JavaScript backend. It resolves
 symbols while building, groups source instructions into basic blocks, and emits
 native JavaScript arithmetic over an `Int32Array` Lino workspace. The browser
-host owns display, input, audio, persistence, and other `isocall` services. A
-WebAssembly backend is the next performance stage and will share the same
-front-end and host contract.
+host owns display, input, audio, persistence, and other `isocall` services.
+JavaScript is the product backend: performance work compiles larger Lino regions
+into optimized JavaScript and replaces historical native fragments with exact
+portable JavaScript intrinsics instead of interpreting individual operations.
+
+The browser loader compiles ad hoc source through a generated `blob:` module,
+so sites using Content Security Policy must allow `blob:` in `script-src`.
+Strict deployments can instead generate the ES module with the command-line
+compiler during their build and serve that static module without `blob:`.
 
 ## Try it
 
@@ -36,7 +42,7 @@ for browser persistence.
 Unsupported syntax fails at compile time. In particular, embedded native x86
 byte fragments are never ignored or approximated. Noctis currently uses those
 fragments heavily, so the browser port will provide portable intrinsic forms
-and a WebAssembly lowering for each one before claiming game compatibility.
+for each one before claiming game compatibility.
 
 ## Project boundaries
 
@@ -44,3 +50,10 @@ This is an independent implementation based on documented L.in.oleum language
 behaviour and black-box compiler results. It does not copy or modify the
 original WPL-licensed compiler source. The playable website lives separately
 in `Fabulu/Linoctissite` and pins a known LinoJava revision.
+
+Development uses bounded product waves with targeted reconnaissance, an
+architecture consolidation, implementation, review, focused QA, and tests.
+The complete iteration and performance contract is in
+[DEVELOPMENT.md](DEVELOPMENT.md). The consolidated JavaScript compiler,
+machine, browser-loader, and real-iGUI design is in
+[ARCHITECTURE.md](ARCHITECTURE.md).
