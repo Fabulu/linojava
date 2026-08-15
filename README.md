@@ -62,11 +62,18 @@ of the real iGUI framebuffer and pointer-driven menu is live at
 
 The current Noctis closure loads 73 modules and lowers to 56,945 JavaScript
 instructions. All ordinary statements now parse, including unsigned apostrophe
-arithmetic and float predicates. Its 204 embedded native fragments are explicit
-intrinsics rather than hidden interpreter operations. Portable implementations
-now cover 50 integer, framebuffer, page-memory, raster, projection, control,
-and conversion kernels. The remaining 154 occurrences are rejected until their
-JavaScript implementations are added.
+arithmetic and float predicates. Its 204 embedded native fragment occurrences
+map to 202 explicit intrinsic IDs rather than hidden interpreter operations.
+Portable JavaScript now implements 97 of those IDs across integer, framebuffer,
+page-memory, raster, projection, x87, geometry, and conversion families. The
+other 105 remain explicit runtime errors if an unported path reaches them.
+
+A focused full-game boot advances through initialization, rendering, repeated
+`RETRACE` calls, and the frame clock's real millisecond `SLEEP` contract. The
+default path ran for 160 retraces without entering an unsupported intrinsic.
+This is execution evidence for that path, not a claim that every game mode is
+already supported. Yield results carry the requested sleep duration so browser
+hosts can resume on the correct clock instead of spinning.
 
 ## Project boundaries
 

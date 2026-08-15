@@ -87,6 +87,17 @@ test("compileProject attaches its linked stockfile to the default host", async (
   );
 });
 
+test("yielding host calls carry their requested browser delay", async () => {
+  const program = await compileProject("sleep.lino", {
+    resolveSource() { return '"programme" isocall; end;'; },
+  }, {
+    host: { isocall() { return { yielded: true, sleepMilliseconds: 7, success: true }; } },
+  });
+  assert.deepEqual(program.run(5), {
+    status: "yield", instructions: 1, X: 0x646f6e65, sleepMilliseconds: 7,
+  });
+});
+
 test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript", async () => {
   const source = `
     "variables" dividend = 0ffffffffh; divisor = 2; float one = 1f; float two = 2f; result = 0;

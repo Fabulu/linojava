@@ -25,7 +25,16 @@ function fixture() {
     "SUfmask", "SUfval",
     "PJfwbase", "PJnrv", "PJvr", "PJvr2", "PJvr22", "PJrwfbase",
     "PJdoflag", "FCWSAV", "FCWTMP", "FSW", "FCWCSAV", "FCWCHOP",
-    "FI", "FA0", "FS0",
+    "FI", "FA0", "FB0", "FS0",
+    "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
+    "FKNsIdentitySpill2t0", "FKNsIdentitySpill3t0", "FKNsIdentitySpill4t0",
+    "FKNsIdentitySpillAllt0", "FKIsThereIdentityK1EM50", "FKProd4Spilledt0",
+    "nsicsav", "nsicchop", "nsicq0",
+    "gcsav", "gcchop", "gcQ0", "gcT0", "gcK0", "gcTen0", "gcHun0",
+    "gcFif0", "gcFiv0", "gcFvt0", "gcTwo0", "gcMil0", "gcCen0",
+    "gcFivp0", "gcTent0", "gc41120",
+    "VHSstarptr", "VHSfwbase", "VHSdx0", "VHSdy0", "VHSdz0", "VHSdepth",
+    "GCx", "GCy",
   ];
   const symbols = new Map(names.map((name, index) => [
     canonicalName(name),
@@ -365,6 +374,7 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   linked.symbols.get(canonicalName("FA0")).value = 1_800_000;
   linked.symbols.get(canonicalName("FS0")).value = 1_800_002;
   linked.symbols.get(canonicalName("FI")).value = 1_800_003;
+  linked.symbols.get(canonicalName("FB0")).value = 1_800_004;
   const view = new DataView(memory.buffer);
   memory[at("FI")] = -123;
   run(IDS.convertIntToFloat);
@@ -392,4 +402,155 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   view.setFloat64(at("FA0") * 4, 0, true);
   run(IDS.loadFloat32);
   assert.equal(view.getFloat64(at("FA0") * 4, true), -2.5);
+
+  const setPair = (a, b) => {
+    view.setFloat64(at("FA0") * 4, a, true);
+    view.setFloat64(at("FB0") * 4, b, true);
+  };
+  setPair(1.5, 2.25);
+  run(IDS.addFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 3.75);
+  setPair(5, 1.25);
+  run(IDS.subtractFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 3.75);
+  setPair(1.5, -4);
+  run(IDS.multiplyFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), -6);
+  setPair(7.5, 2.5);
+  run(IDS.divideFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 3);
+  view.setFloat64(at("FA0") * 4, 81, true);
+  run(IDS.squareRootFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 9);
+  view.setFloat64(at("FA0") * 4, 0, true);
+  run(IDS.negateFloat64);
+  assert.equal(Object.is(view.getFloat64(at("FA0") * 4, true), -0), true);
+  run(IDS.absoluteFloat64);
+  assert.equal(Object.is(view.getFloat64(at("FA0") * 4, true), 0), true);
+  view.setFloat64(at("FA0") * 4, Math.PI / 2, true);
+  run(IDS.sineFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 1);
+  view.setFloat64(at("FA0") * 4, 0, true);
+  run(IDS.cosineFloat64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 1);
+  setPair(1, 0);
+  run(IDS.atan2Float64);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), Math.PI / 2);
+  setPair(Number.NaN, 0);
+  run(IDS.compareFloat64);
+  assert.equal(memory[at("FSW")], 0x4500);
+
+  const chainSlots = [
+    "FC0", "FD0", "FKNsIdentitySpill1t0", "FKNsIdentitySpill2t0",
+    "FKNsIdentitySpill3t0", "FKNsIdentitySpill4t0", "FKNsIdentitySpillAllt0",
+    "FKIsThereIdentityK1EM50", "FKProd4Spilledt0",
+  ];
+  chainSlots.forEach((name, index) => {
+    linked.symbols.get(canonicalName(name)).value = 1_810_000 + index * 2;
+  });
+  memory[at("FJ0")] = 123456789;
+  memory[at("FJ1")] = -987654321;
+  memory[at("FJ2")] = 135791113;
+  const chainCases = [
+    [IDS.nearStarIdentity, 0xc20ed72b0c4e6ce5n],
+    [IDS.nearStarIdentityPermuted, 0xc20ed72b0c4e6ce5n],
+    [IDS.nearStarIdentitySpill1, 0xc20ed72b0c4e6ce5n],
+    [IDS.nearStarIdentitySpill2, 0xc20ed72b0c4e6ce6n],
+    [IDS.nearStarIdentitySpill3, 0xc20ed72b0c4e6ce5n],
+    [IDS.nearStarIdentitySpill4, 0xc20ed72b0c4e6ce6n],
+    [IDS.nearStarIdentitySpillAll, 0xc20ed72b0c4e6ce6n],
+  ];
+  for (const [id, expected] of chainCases) {
+    run(id);
+    assert.equal(view.getBigUint64(at("FA0") * 4, true), expected);
+  }
+  view.setFloat64(at("FKIsThereIdentityK1EM50") * 4, 1e-5, true);
+  run(IDS.isThereIdentity);
+  assert.equal(view.getBigUint64(at("FA0") * 4, true), 0xc20ed72b0c4e6ce7n);
+
+  view.setFloat64(at("FA0") * 4, 1.5, true);
+  view.setFloat64(at("FB0") * 4, 2, true);
+  view.setFloat64(at("FC0") * 4, 3, true);
+  view.setFloat64(at("FD0") * 4, 4, true);
+  run(IDS.product4);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 36);
+  view.setFloat64(at("FA0") * 4, 1.5, true);
+  run(IDS.product4Spilled);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 36);
+
+  linked.symbols.get(canonicalName("nsicq0")).value = 1_830_000;
+  machine.fpu.control = 0x133f;
+  run(IDS.saveNearStarChopControl);
+  assert.equal(memory[at("nsicsav")], 0x137f);
+  memory[at("nsicchop")] = 0x1f3f;
+  run(IDS.nearStarIdentityChop16);
+  assert.equal(memory[at("nsicq0")] & 0xffff, 40567);
+  assert.equal(machine.fpu.control, 0x137f);
+
+  const geometrySlots = [
+    "gcQ0", "gcT0", "gcK0", "gcTen0", "gcHun0", "gcFif0", "gcFiv0",
+    "gcFvt0", "gcTwo0", "gcMil0", "gcCen0", "gcFivp0", "gcTent0", "gc41120",
+  ];
+  geometrySlots.forEach((name, index) => {
+    linked.symbols.get(canonicalName(name)).value = 1_840_000 + index * 2;
+  });
+  machine.fpu.control = 0x133f;
+  run(IDS.enterGeometryChop);
+  assert.equal(memory[at("gcsav")], 0x137f);
+  memory[at("gcchop")] = 0x1f3f;
+  view.setFloat64(at("gcK0") * 4, 10, true);
+  view.setFloat64(at("FB0") * 4, 12.75, true);
+  run(IDS.geometryKMulChop);
+  assert.equal(memory[at("gcQ0")], 127);
+  assert.equal(machine.fpu.control, 0x137f);
+
+  view.setFloat64(at("FB0") * 4, 1, true);
+  view.setFloat64(at("FC0") * 4, 41, true);
+  run(IDS.geometryQuoMulChop);
+  assert.equal(memory[at("gcQ0")], 0);
+  view.setFloat64(at("FB0") * 4, 1, true);
+  run(IDS.geometryQuoMulChopSpill1);
+  assert.equal(memory[at("gcQ0")], 1);
+  view.setFloat64(at("FB0") * 4, 1, true);
+  run(IDS.geometryQuoMulChopSpill2);
+  assert.equal(memory[at("gcQ0")], 1);
+
+  view.setFloat64(at("gcFiv0") * 4, 500, true);
+  memory[at("FI")] = 125;
+  run(IDS.geometryRatioStore500);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 0.25);
+  view.setFloat64(at("gcMil0") * 4, 1_000_000, true);
+  view.setFloat64(at("gcCen0") * 4, 100, true);
+  memory[at("FI")] = 3;
+  run(IDS.geometryPlanetRayStore);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), 3_000_100);
+
+  memory[at("VHSstarptr")] = 1_870_000;
+  memory.set([10, 20, 50], 1_870_000);
+  linked.symbols.get(canonicalName("VHSdx0")).value = 1_870_010;
+  linked.symbols.get(canonicalName("VHSdy0")).value = 1_870_012;
+  linked.symbols.get(canonicalName("VHSdz0")).value = 1_870_014;
+  view.setFloat64(at("VHSdx0") * 4, 0, true);
+  view.setFloat64(at("VHSdy0") * 4, 0, true);
+  view.setFloat64(at("VHSdz0") * 4, 0, true);
+  memory[at("VHSfwbase")] = 1_880_000;
+  run(IDS.spaceRelativeCoordinates);
+  assert.deepEqual(
+    [view.getFloat64((1_880_000 + 504) * 4, true), view.getFloat64((1_880_000 + 512) * 4, true), view.getFloat64((1_880_000 + 520) * 4, true)],
+    [10, 20, 50],
+  );
+  view.setFloat64((1_880_000 + 428) * 4, 1, true);
+  view.setFloat64((1_880_000 + 430) * 4, 0, true);
+  view.setFloat64((1_880_000 + 436) * 4, 1, true);
+  view.setFloat64((1_880_000 + 438) * 4, 0, true);
+  run(IDS.spaceRotateDepth);
+  assert.deepEqual(
+    [view.getFloat64((1_880_000 + 64) * 4, true), view.getFloat64((1_880_000 + 72) * 4, true), view.getFloat64((1_880_000 + 80) * 4, true), memory[at("VHSdepth")]],
+    [10, 20, 50, 50],
+  );
+  view.setFloat64((1_880_000 + 50) * 4, 100, true);
+  view.setFloat64((1_880_000 + 38) * 4, 160, true);
+  view.setFloat64((1_880_000 + 40) * 4, 100, true);
+  run(IDS.spaceProject);
+  assert.deepEqual([memory[at("GCx")], memory[at("GCy")]], [180, 140]);
 });

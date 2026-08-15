@@ -79,6 +79,7 @@ export function linkProject(project, options = {}) {
   memory[kernelBase + OFFSETS.ProcessRAMtop] = ramTop;
   memory[kernelBase + OFFSETS.ProcessPriority] = constants.get("normalpriority") ?? 2;
   memory[kernelBase + OFFSETS.DisplayStatus] = constants.get("active") ?? 2;
+  memory[kernelBase + OFFSETS.CountsPerMillisecond] = options.countsPerMillisecond ?? 1000;
 
   const directors = resolveDirectors(declarations, constants);
   const width = directors.get("displaywidth") ?? options.displayWidth ?? 0;

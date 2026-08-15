@@ -51,6 +51,53 @@ const IDS = Object.freeze({
   narrowFloat32: "native:fpconv.txt:5835de7d",
   storeFloat32: "native:fpconv.txt:a0a7129a",
   loadFloat32: "native:fpconv.txt:518837c4",
+  addFloat64: "native:fpx87.txt:60a68e23",
+  subtractFloat64: "native:fpx87.txt:49d5def3",
+  multiplyFloat64: "native:fpx87.txt:a83af22d",
+  divideFloat64: "native:fpx87.txt:40b1a29b",
+  squareRootFloat64: "native:fpx87.txt:6dccac55",
+  negateFloat64: "native:fpx87.txt:8ab37b39",
+  absoluteFloat64: "native:fpx87.txt:9272e6ee",
+  sineFloat64: "native:fpx87.txt:990f933f",
+  cosineFloat64: "native:fpx87.txt:6030b1a7",
+  atan2Float64: "native:fpx87.txt:75bee0ee",
+  compareFloat64: "native:fpx87.txt:8a4b2806",
+  nearStarIdentity: "native:fpchains.txt:8412f865",
+  nearStarIdentityPermuted: "native:fpchains.txt:a6f34a77",
+  nearStarIdentitySpill1: "native:fpchains.txt:f8ee8e19",
+  nearStarIdentitySpill2: "native:fpchains.txt:c1a6a36c",
+  nearStarIdentitySpill3: "native:fpchains.txt:8d7a8fb7",
+  nearStarIdentitySpill4: "native:fpchains.txt:351b2030",
+  nearStarIdentitySpillAll: "native:fpchains.txt:4e0d282c",
+  isThereIdentity: "native:fpchains.txt:8c6b5253",
+  product4: "native:fpchains.txt:ebfc76f9",
+  product4Spilled: "native:fpchains.txt:c457fe77",
+  saveNearStarChopControl: "native:nsident.txt:55a8f3b7",
+  nearStarIdentityChop16: "native:nsident.txt:98321a92",
+  enterGeometryChop: "native:geoconv.txt:208b7b51",
+  geometryKMulChop: "native:geoconv.txt:ef7a3d09",
+  geometryKMulChopSpilled: "native:geoconv.txt:c9ce38be",
+  geometryTwoMulKChop: "native:geoconv.txt:27dad376",
+  geometrySeedTiltChop: "native:geoconv.txt:533bcfd2",
+  geometrySeedTiltChopSpilled: "native:geoconv.txt:6b987557",
+  geometryPlainChop: "native:geoconv.txt:9759da1e",
+  geometryPlainChop32: "native:geoconv.txt:4b17cbfa",
+  geometryQuoMulChop: "native:geoconv.txt:db2c8edc",
+  geometryQuoMulChopSpill1: "native:geoconv.txt:21d6704d",
+  geometryQuoMulChopSpill2: "native:geoconv.txt:6cc67b59",
+  geometrySeedStore100: "native:geoconv.txt:7aa480fb",
+  geometryRatioStore50: "native:geoconv.txt:a72b917d",
+  geometryRatioStore500: "native:geoconv.txt:4560767d",
+  geometryRatioStore5000: "native:geoconv.txt:2452bee5",
+  geometryEccentricityStore: "native:geoconv.txt:15cdf8c2",
+  geometryPlanetRayStore: "native:geoconv.txt:36918bb0",
+  geometryMoonRayStore: "native:geoconv.txt:dffdf352",
+  geometrySurfaceSeedChop: "native:geoconv.txt:6dececbb",
+  geometryAdd4112Chop: "native:geoconv.txt:5c90016f",
+  missionWidenFloat32: "native:mgloop.txt:518837c4",
+  spaceRelativeCoordinates: "native:vhspace.txt:0abeba20",
+  spaceRotateDepth: "native:vhspace.txt:d05e1b23",
+  spaceProject: "native:vhspace.txt:3c924fe2",
 });
 
 function address(linked, name) {
@@ -128,6 +175,140 @@ function convertToInt32(number, control) {
         : Math.trunc(number);
   if (rounded < -2147483648 || rounded > 2147483647) return -2147483648;
   return rounded | 0;
+}
+
+function bitLength(number) {
+  return number === 0n ? 0 : (number < 0n ? -number : number).toString(2).length;
+}
+
+function roundBinary(integer, exponent, precision, control, sticky = false) {
+  if (integer === 0n) return { integer: 0n, exponent: 0 };
+  const negative = integer < 0n;
+  let magnitude = negative ? -integer : integer;
+  const shift = bitLength(magnitude) - precision;
+  if (shift <= 0) return { integer, exponent };
+  const divisor = 1n << BigInt(shift);
+  let rounded = magnitude >> BigInt(shift);
+  const discarded = magnitude & (divisor - 1n);
+  const mode = (control >>> 10) & 3;
+  let increment = false;
+  if (mode === 0) {
+    const half = divisor >> 1n;
+    increment = discarded > half
+      || (discarded === half && (sticky || (rounded & 1n) !== 0n));
+  } else if (mode === 1) {
+    increment = negative && (discarded !== 0n || sticky);
+  } else if (mode === 2) {
+    increment = !negative && (discarded !== 0n || sticky);
+  }
+  if (increment) rounded += 1n;
+  let outputExponent = exponent + shift;
+  if (bitLength(rounded) > precision) {
+    rounded >>= 1n;
+    outputExponent += 1;
+  }
+  return { integer: negative ? -rounded : rounded, exponent: outputExponent };
+}
+
+function extendedFromInteger(number) {
+  return { integer: BigInt(number | 0), exponent: 0, special: null };
+}
+
+function extendedFromNumber(number) {
+  if (!Number.isFinite(number)) return { integer: 0n, exponent: 0, special: number };
+  if (number === 0) return { integer: 0n, exponent: 0, special: Object.is(number, -0) ? -0 : null };
+  const scratch = new ArrayBuffer(8);
+  const view = new DataView(scratch);
+  view.setFloat64(0, number, true);
+  const bits = view.getBigUint64(0, true);
+  const negative = (bits >> 63n) !== 0n;
+  const encodedExponent = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & 0xfffffffffffffn;
+  const significand = encodedExponent === 0 ? fraction : (1n << 52n) | fraction;
+  const exponent = encodedExponent === 0 ? -1074 : encodedExponent - 1023 - 52;
+  return { integer: negative ? -significand : significand, exponent, special: null };
+}
+
+function extendedToNumber(value, control) {
+  if (value.special !== null) return value.special;
+  if (value.integer === 0n) return 0;
+  const rounded = roundBinary(value.integer, value.exponent, 53, control);
+  return Number(rounded.integer) * 2 ** rounded.exponent;
+}
+
+function extendedMultiply(left, right, control) {
+  if (left.special !== null || right.special !== null) {
+    return extendedFromNumber(extendedToNumber(left, control) * extendedToNumber(right, control));
+  }
+  const rounded = roundBinary(
+    left.integer * right.integer,
+    left.exponent + right.exponent,
+    64,
+    control,
+  );
+  return { ...rounded, special: null };
+}
+
+function extendedAdd(left, right, control) {
+  if (left.special !== null || right.special !== null) {
+    return extendedFromNumber(extendedToNumber(left, control) + extendedToNumber(right, control));
+  }
+  const exponent = Math.min(left.exponent, right.exponent);
+  const leftInteger = left.integer << BigInt(left.exponent - exponent);
+  const rightInteger = right.integer << BigInt(right.exponent - exponent);
+  const rounded = roundBinary(leftInteger + rightInteger, exponent, 64, control);
+  return { ...rounded, special: null };
+}
+
+function extendedSubtract(left, right, control) {
+  return extendedAdd(left, { ...right, integer: -right.integer, special: right.special === null ? null : -right.special }, control);
+}
+
+function extendedDivide(left, right, control) {
+  if (left.special !== null || right.special !== null || right.integer === 0n) {
+    return extendedFromNumber(extendedToNumber(left, control) / extendedToNumber(right, control));
+  }
+  const negative = (left.integer < 0n) !== (right.integer < 0n);
+  const numerator = left.integer < 0n ? -left.integer : left.integer;
+  const denominator = right.integer < 0n ? -right.integer : right.integer;
+  const shift = Math.max(0, 68 + bitLength(denominator) - bitLength(numerator));
+  const scaled = numerator << BigInt(shift);
+  const quotient = scaled / denominator;
+  const remainder = scaled % denominator;
+  const rounded = roundBinary(
+    negative ? -quotient : quotient,
+    left.exponent - right.exponent - shift,
+    64,
+    control,
+    remainder !== 0n,
+  );
+  return { ...rounded, special: null };
+}
+
+function extendedToBigInt(value, control) {
+  if (value.special !== null) return -(1n << 63n);
+  if (value.exponent >= 0) return value.integer << BigInt(value.exponent);
+  const negative = value.integer < 0n;
+  const magnitude = negative ? -value.integer : value.integer;
+  const shift = -value.exponent;
+  const divisor = 1n << BigInt(shift);
+  let quotient = magnitude >> BigInt(shift);
+  const remainder = magnitude & (divisor - 1n);
+  const mode = (control >>> 10) & 3;
+  if (remainder !== 0n) {
+    if (mode === 0) {
+      const half = divisor >> 1n;
+      if (remainder > half || (remainder === half && (quotient & 1n) !== 0n)) quotient += 1n;
+    } else if (mode === 1 && negative) quotient += 1n;
+    else if (mode === 2 && !negative) quotient += 1n;
+  }
+  return negative ? -quotient : quotient;
+}
+
+function spillExtended(memory, linked, slotName, value, control) {
+  const stored = extendedToNumber(value, control);
+  writeFloat64(memory, address(linked, slotName), stored);
+  return extendedFromNumber(stored);
 }
 
 function value(memory, linked, name) {
@@ -834,6 +1015,479 @@ function loadFloat32(machine, linked) {
   writeFloat64(memory, address(linked, "FA0"), float32FromBits(value(memory, linked, "FS0")));
 }
 
+function binaryFloat64(machine, linked, operation) {
+  const memory = machine.memory;
+  const a = readFloat64(memory, address(linked, "FA0"));
+  const b = readFloat64(memory, address(linked, "FB0"));
+  writeFloat64(memory, address(linked, "FA0"), operation(a, b));
+}
+
+function addFloat64(machine, linked) {
+  binaryFloat64(machine, linked, (a, b) => a + b);
+}
+
+function subtractFloat64(machine, linked) {
+  binaryFloat64(machine, linked, (a, b) => a - b);
+}
+
+function multiplyFloat64(machine, linked) {
+  binaryFloat64(machine, linked, (a, b) => a * b);
+}
+
+function divideFloat64(machine, linked) {
+  binaryFloat64(machine, linked, (a, b) => a / b);
+}
+
+function squareRootFloat64(machine, linked) {
+  const memory = machine.memory;
+  const fa = address(linked, "FA0");
+  writeFloat64(memory, fa, Math.sqrt(readFloat64(memory, fa)));
+}
+
+function negateFloat64(machine, linked) {
+  const high = address(linked, "FA0") + 1;
+  machine.memory[high] ^= 0x80000000;
+}
+
+function absoluteFloat64(machine, linked) {
+  const high = address(linked, "FA0") + 1;
+  machine.memory[high] &= 0x7fffffff;
+}
+
+function sineFloat64(machine, linked) {
+  const memory = machine.memory;
+  const fa = address(linked, "FA0");
+  writeFloat64(memory, fa, Math.sin(readFloat64(memory, fa)));
+}
+
+function cosineFloat64(machine, linked) {
+  const memory = machine.memory;
+  const fa = address(linked, "FA0");
+  writeFloat64(memory, fa, Math.cos(readFloat64(memory, fa)));
+}
+
+function atan2Float64(machine, linked) {
+  const memory = machine.memory;
+  const fa = address(linked, "FA0");
+  writeFloat64(memory, fa, Math.atan2(
+    readFloat64(memory, fa),
+    readFloat64(memory, address(linked, "FB0")),
+  ));
+}
+
+function compareFloat64(machine, linked) {
+  const memory = machine.memory;
+  const a = readFloat64(memory, address(linked, "FA0"));
+  const b = readFloat64(memory, address(linked, "FB0"));
+  const status = Number.isNaN(a) || Number.isNaN(b) ? 0x4500
+    : a < b ? 0x0100
+      : a === b ? 0x4000
+        : 0;
+  memory[address(linked, "FSW")] = status;
+  floatingPoint(machine).status = status;
+}
+
+function nearStarIdentityValue(machine, linked, order, spillOperations = [], spillName = null) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const inputs = order.map((name) => value(memory, linked, name));
+  const constant = extendedFromInteger(100000);
+  let accumulator = extendedDivide(extendedFromInteger(inputs[0]), constant, control);
+  if (spillOperations.includes(1)) accumulator = spillExtended(memory, linked, spillName, accumulator, control);
+  accumulator = extendedMultiply(accumulator, extendedFromInteger(inputs[1]), control);
+  if (spillOperations.includes(2)) accumulator = spillExtended(memory, linked, spillName, accumulator, control);
+  accumulator = extendedDivide(accumulator, constant, control);
+  if (spillOperations.includes(3)) accumulator = spillExtended(memory, linked, spillName, accumulator, control);
+  accumulator = extendedMultiply(accumulator, extendedFromInteger(inputs[2]), control);
+  if (spillOperations.includes(4)) accumulator = spillExtended(memory, linked, spillName, accumulator, control);
+  accumulator = extendedDivide(accumulator, constant, control);
+  if (spillOperations.includes(5)) accumulator = spillExtended(memory, linked, spillName, accumulator, control);
+  return accumulator;
+}
+
+function runNearStarIdentity(machine, linked, order, spillOperations = [], spillName = null) {
+  const result = nearStarIdentityValue(machine, linked, order, spillOperations, spillName);
+  writeFloat64(
+    machine.memory,
+    address(linked, "FA0"),
+    extendedToNumber(result, floatingPoint(machine).control),
+  );
+}
+
+function nearStarIdentity(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ0", "FJ1", "FJ2"]);
+}
+
+function nearStarIdentityPermuted(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ2", "FJ1", "FJ0"]);
+}
+
+function nearStarIdentitySpill1(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ0", "FJ1", "FJ2"], [1], "FKNsIdentitySpill1t0");
+}
+
+function nearStarIdentitySpill2(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ0", "FJ1", "FJ2"], [2], "FKNsIdentitySpill2t0");
+}
+
+function nearStarIdentitySpill3(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ0", "FJ1", "FJ2"], [3], "FKNsIdentitySpill3t0");
+}
+
+function nearStarIdentitySpill4(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ0", "FJ1", "FJ2"], [4], "FKNsIdentitySpill4t0");
+}
+
+function nearStarIdentitySpillAll(machine, linked) {
+  runNearStarIdentity(machine, linked, ["FJ0", "FJ1", "FJ2"], [1, 2, 3, 4], "FKNsIdentitySpillAllt0");
+}
+
+function isThereIdentity(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const scale = extendedFromNumber(readFloat64(memory, address(linked, "FKIsThereIdentityK1EM50")));
+  const x = extendedMultiply(extendedFromInteger(value(memory, linked, "FJ0")), scale, control);
+  const y = extendedMultiply(extendedFromInteger(value(memory, linked, "FJ1")), scale, control);
+  const z = extendedMultiply(extendedFromInteger(value(memory, linked, "FJ2")), scale, control);
+  const yz = extendedMultiply(y, z, control);
+  const result = extendedMultiply(x, yz, control);
+  writeFloat64(memory, address(linked, "FA0"), extendedToNumber(result, control));
+}
+
+function product4(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = extendedFromNumber(readFloat64(memory, address(linked, "FA0")));
+  for (const name of ["FB0", "FC0", "FD0"]) {
+    result = extendedMultiply(result, extendedFromNumber(readFloat64(memory, address(linked, name))), control);
+  }
+  writeFloat64(memory, address(linked, "FA0"), extendedToNumber(result, control));
+}
+
+function product4Spilled(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = extendedMultiply(
+    extendedFromNumber(readFloat64(memory, address(linked, "FA0"))),
+    extendedFromNumber(readFloat64(memory, address(linked, "FB0"))),
+    control,
+  );
+  result = spillExtended(memory, linked, "FKProd4Spilledt0", result, control);
+  result = extendedMultiply(result, extendedFromNumber(readFloat64(memory, address(linked, "FC0"))), control);
+  result = spillExtended(memory, linked, "FKProd4Spilledt0", result, control);
+  result = extendedMultiply(result, extendedFromNumber(readFloat64(memory, address(linked, "FD0"))), control);
+  writeFloat64(memory, address(linked, "FA0"), extendedToNumber(result, control));
+}
+
+function saveNearStarChopControl(machine, linked) {
+  machine.memory[address(linked, "nsicsav")] = (floatingPoint(machine).control | 0x40) & 0xffff;
+}
+
+function nearStarIdentityChop16(machine, linked) {
+  const memory = machine.memory;
+  const fpu = floatingPoint(machine);
+  const saved = fpu.control;
+  const result = nearStarIdentityValue(machine, linked, ["FJ0", "FJ1", "FJ2"]);
+  fpu.control = value(memory, linked, "nsicchop") & 0xffff;
+  let integer = extendedToBigInt(result, fpu.control);
+  if (integer < -(1n << 63n) || integer > (1n << 63n) - 1n) integer = -(1n << 63n);
+  const bits = BigInt.asUintN(64, integer);
+  memory[address(linked, "nsicq0")] = Number(bits & 0xffffffffn) | 0;
+  memory[address(linked, "nsicq0") + 1] = Number((bits >> 32n) & 0xffffffffn) | 0;
+  fpu.control = value(memory, linked, "nsicsav") & 0xffff;
+  if (fpu.control === 0) fpu.control = saved;
+}
+
+function writeInt64(memory, unit, integer) {
+  const bits = BigInt.asUintN(64, integer);
+  memory[unit] = Number(bits & 0xffffffffn) | 0;
+  memory[unit + 1] = Number((bits >> 32n) & 0xffffffffn) | 0;
+}
+
+function enterGeometryChop(machine, linked) {
+  machine.memory[address(linked, "gcsav")] = (floatingPoint(machine).control | 0x40) & 0xffff;
+}
+
+function geometryConstant(memory, linked, name) {
+  return extendedFromNumber(readFloat64(memory, address(linked, name)));
+}
+
+function geometryInput(memory, linked, name) {
+  return extendedFromNumber(readFloat64(memory, address(linked, name)));
+}
+
+function geometrySpill(machine, linked, result) {
+  const control = floatingPoint(machine).control;
+  return spillExtended(machine.memory, linked, "gcT0", result, control);
+}
+
+function geometryChop(machine, linked, result) {
+  const memory = machine.memory;
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "gcchop") & 0xffff;
+  let integer = extendedToBigInt(result, fpu.control);
+  if (integer < -(1n << 63n) || integer > (1n << 63n) - 1n) integer = -(1n << 63n);
+  writeInt64(memory, address(linked, "gcQ0"), integer);
+  fpu.control = value(memory, linked, "gcsav") & 0xffff;
+}
+
+function geometryKMulValue(machine, linked) {
+  const memory = machine.memory;
+  return extendedMultiply(
+    geometryInput(memory, linked, "FB0"),
+    geometryConstant(memory, linked, "gcK0"),
+    floatingPoint(machine).control,
+  );
+}
+
+function geometryKMulChop(machine, linked) {
+  geometryChop(machine, linked, geometryKMulValue(machine, linked));
+}
+
+function geometryKMulChopSpilled(machine, linked) {
+  geometryChop(machine, linked, geometrySpill(machine, linked, geometryKMulValue(machine, linked)));
+}
+
+function geometryTwoMulKChop(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = extendedMultiply(geometryInput(memory, linked, "FB0"), geometryInput(memory, linked, "FC0"), control);
+  result = extendedMultiply(result, geometryConstant(memory, linked, "gcK0"), control);
+  geometryChop(machine, linked, result);
+}
+
+function geometrySeedTiltValue(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const tilt = geometryInput(memory, linked, "FC0");
+  tilt.integer = tilt.integer < 0n ? -tilt.integer : tilt.integer;
+  const scaled = extendedMultiply(tilt, geometryConstant(memory, linked, "gcTen0"), control);
+  return extendedAdd(geometryInput(memory, linked, "FB0"), scaled, control);
+}
+
+function geometrySeedTiltChop(machine, linked) {
+  geometryChop(machine, linked, geometrySeedTiltValue(machine, linked));
+}
+
+function geometrySeedTiltChopSpilled(machine, linked) {
+  geometryChop(machine, linked, geometrySpill(machine, linked, geometrySeedTiltValue(machine, linked)));
+}
+
+function geometryPlainChop(machine, linked) {
+  geometryChop(machine, linked, geometryInput(machine.memory, linked, "FB0"));
+}
+
+function geometryPlainChop32(machine, linked) {
+  const memory = machine.memory;
+  const fpu = floatingPoint(machine);
+  fpu.control = value(memory, linked, "gcchop") & 0xffff;
+  memory[address(linked, "FI")] = convertToInt32(readFloat64(memory, address(linked, "FB0")), fpu.control);
+  fpu.control = value(memory, linked, "gcsav") & 0xffff;
+}
+
+function geometryQuoMulValue(machine, linked, spillQuotient = false, spillProduct = false) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const divisor = geometryInput(memory, linked, "FC0");
+  let result = extendedDivide(geometryInput(memory, linked, "FB0"), divisor, control);
+  if (spillQuotient) result = geometrySpill(machine, linked, result);
+  result = extendedMultiply(result, divisor, control);
+  if (spillProduct) result = geometrySpill(machine, linked, result);
+  return result;
+}
+
+function geometryQuoMulChop(machine, linked) {
+  geometryChop(machine, linked, geometryQuoMulValue(machine, linked));
+}
+
+function geometryQuoMulChopSpill1(machine, linked) {
+  geometryChop(machine, linked, geometryQuoMulValue(machine, linked, true, false));
+}
+
+function geometryQuoMulChopSpill2(machine, linked) {
+  geometryChop(machine, linked, geometryQuoMulValue(machine, linked, false, true));
+}
+
+function storeExtendedResult(machine, linked, result) {
+  writeFloat64(
+    machine.memory,
+    address(linked, "FA0"),
+    extendedToNumber(result, floatingPoint(machine).control),
+  );
+}
+
+function geometrySeedStore100(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const product = extendedMultiply(geometryInput(memory, linked, "FC0"), geometryInput(memory, linked, "FB0"), control);
+  const ratio = extendedDivide(extendedFromInteger(value(memory, linked, "FI")), geometryConstant(memory, linked, "gcHun0"), control);
+  storeExtendedResult(machine, linked, extendedAdd(product, ratio, control));
+}
+
+function geometryRatioStore(machine, linked, divisorName) {
+  storeExtendedResult(machine, linked, extendedDivide(
+    extendedFromInteger(value(machine.memory, linked, "FI")),
+    geometryConstant(machine.memory, linked, divisorName),
+    floatingPoint(machine).control,
+  ));
+}
+
+function geometryRatioStore50(machine, linked) { geometryRatioStore(machine, linked, "gcFif0"); }
+function geometryRatioStore500(machine, linked) { geometryRatioStore(machine, linked, "gcFiv0"); }
+function geometryRatioStore5000(machine, linked) { geometryRatioStore(machine, linked, "gcFvt0"); }
+
+function geometryEccentricityStore(machine, linked) {
+  const ratio = extendedDivide(
+    extendedFromInteger(value(machine.memory, linked, "FI")),
+    geometryConstant(machine.memory, linked, "gcTwo0"),
+    floatingPoint(machine).control,
+  );
+  storeExtendedResult(machine, linked, extendedSubtract(extendedFromInteger(1), ratio, floatingPoint(machine).control));
+}
+
+function geometryLinearStore(machine, linked, multiplierName, addendName) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const scaled = extendedMultiply(
+    extendedFromInteger(value(memory, linked, "FI")),
+    geometryConstant(memory, linked, multiplierName),
+    control,
+  );
+  storeExtendedResult(machine, linked, extendedAdd(scaled, geometryConstant(memory, linked, addendName), control));
+}
+
+function geometryPlanetRayStore(machine, linked) { geometryLinearStore(machine, linked, "gcMil0", "gcCen0"); }
+function geometryMoonRayStore(machine, linked) { geometryLinearStore(machine, linked, "gcFivp0", "gcTent0"); }
+
+function geometrySurfaceSeedChop(machine, linked) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  let result = extendedAdd(geometryInput(memory, linked, "FB0"), geometryInput(memory, linked, "FC0"), control);
+  result = extendedAdd(result, geometryInput(memory, linked, "FA0"), control);
+  result = extendedMultiply(result, geometryConstant(memory, linked, "gc41120"), control);
+  geometryChop(machine, linked, result);
+}
+
+function geometryAdd4112Chop(machine, linked) {
+  geometryChop(machine, linked, extendedAdd(
+    geometryInput(machine.memory, linked, "FB0"),
+    geometryConstant(machine.memory, linked, "gc41120"),
+    floatingPoint(machine).control,
+  ));
+}
+
+function scalarBinaryNumber(left, right, control, operation) {
+  const a = extendedFromNumber(left);
+  const b = extendedFromNumber(right);
+  const result = operation === "multiply" ? extendedMultiply(a, b, control)
+    : operation === "divide" ? extendedDivide(a, b, control)
+      : operation === "subtract" ? extendedSubtract(a, b, control)
+        : extendedAdd(a, b, control);
+  return extendedToNumber(result, control);
+}
+
+function writeScalarScratch(machine, linked, number) {
+  writeFloat64(machine.memory, address(linked, "FA0"), number);
+}
+
+function narrowScalar(machine, linked, number) {
+  const narrowed = roundFloat32(number, floatingPoint(machine).control);
+  machine.memory[address(linked, "FS0")] = float32Bits(narrowed);
+  return narrowed;
+}
+
+function spaceRelativeCoordinates(machine, linked) {
+  const memory = machine.memory;
+  const star = value(memory, linked, "VHSstarptr") >>> 0;
+  const floats = value(memory, linked, "VHSfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const axes = [
+    [0, "VHSdx0", 504],
+    [1, "VHSdy0", 512],
+    [2, "VHSdz0", 520],
+  ];
+  for (const [sourceOffset, cameraName, destinationOffset] of axes) {
+    const integer = memory[star + sourceOffset] | 0;
+    writeScalarScratch(machine, linked, integer);
+    const difference = scalarBinaryNumber(
+      integer,
+      readFloat64(memory, address(linked, cameraName)),
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, difference);
+    const narrowed = narrowScalar(machine, linked, difference);
+    writeFloat64(memory, floats + destinationOffset, narrowed);
+  }
+}
+
+function spaceRotateDepth(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "VHSfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const x = readFloat64(memory, floats + 504);
+  const y = readFloat64(memory, floats + 512);
+  const z = readFloat64(memory, floats + 520);
+  const cosBeta = readFloat64(memory, floats + 428);
+  const sinBeta = readFloat64(memory, floats + 430);
+  const cosAlpha = readFloat64(memory, floats + 436);
+  const sinAlpha = readFloat64(memory, floats + 438);
+
+  let first = scalarBinaryNumber(z, sinBeta, control, "multiply");
+  writeFloat64(memory, floats + 496, first);
+  let second = scalarBinaryNumber(x, cosBeta, control, "multiply");
+  let result = scalarBinaryNumber(second, first, control, "add");
+  writeScalarScratch(machine, linked, result);
+  writeFloat64(memory, floats + 64, narrowScalar(machine, linked, result));
+
+  first = scalarBinaryNumber(z, cosBeta, control, "multiply");
+  writeFloat64(memory, floats + 496, first);
+  second = scalarBinaryNumber(x, sinBeta, control, "multiply");
+  result = scalarBinaryNumber(first, second, control, "subtract");
+  writeScalarScratch(machine, linked, result);
+  const z2 = narrowScalar(machine, linked, result);
+  writeFloat64(memory, floats + 482, z2);
+
+  first = scalarBinaryNumber(z2, cosAlpha, control, "multiply");
+  writeFloat64(memory, floats + 496, first);
+  second = scalarBinaryNumber(y, sinAlpha, control, "multiply");
+  result = scalarBinaryNumber(second, first, control, "add");
+  writeScalarScratch(machine, linked, result);
+  writeFloat64(memory, floats + 498, result);
+  const rotatedZ = narrowScalar(machine, linked, result);
+  writeFloat64(memory, floats + 80, rotatedZ);
+
+  first = scalarBinaryNumber(y, cosAlpha, control, "multiply");
+  writeFloat64(memory, floats + 496, first);
+  second = scalarBinaryNumber(z2, sinAlpha, control, "multiply");
+  result = scalarBinaryNumber(first, second, control, "subtract");
+  writeScalarScratch(machine, linked, result);
+  writeFloat64(memory, floats + 72, narrowScalar(machine, linked, result));
+  memory[address(linked, "VHSdepth")] = convertToInt32(rotatedZ, control);
+}
+
+function spaceProject(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "VHSfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const factor = scalarBinaryNumber(
+    readFloat64(memory, floats + 50),
+    readFloat64(memory, floats + 80),
+    control,
+    "divide",
+  );
+  writeScalarScratch(machine, linked, factor);
+  writeFloat64(memory, floats + 502, factor);
+  let result = scalarBinaryNumber(factor, readFloat64(memory, floats + 64), control, "multiply");
+  result = scalarBinaryNumber(result, readFloat64(memory, floats + 38), control, "add");
+  writeScalarScratch(machine, linked, result);
+  memory[address(linked, "GCx")] = convertToInt32(result, control);
+  result = scalarBinaryNumber(factor, readFloat64(memory, floats + 72), control, "multiply");
+  result = scalarBinaryNumber(result, readFloat64(memory, floats + 40), control, "add");
+  writeScalarScratch(machine, linked, result);
+  memory[address(linked, "GCy")] = convertToInt32(result, control);
+}
+
 export const NOCTIS_INTRINSIC_IDS = IDS;
 
 export function createNoctisIntrinsics(overrides = {}) {
@@ -888,6 +1542,53 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.narrowFloat32]: narrowFloat32,
     [IDS.storeFloat32]: storeFloat32,
     [IDS.loadFloat32]: loadFloat32,
+    [IDS.addFloat64]: addFloat64,
+    [IDS.subtractFloat64]: subtractFloat64,
+    [IDS.multiplyFloat64]: multiplyFloat64,
+    [IDS.divideFloat64]: divideFloat64,
+    [IDS.squareRootFloat64]: squareRootFloat64,
+    [IDS.negateFloat64]: negateFloat64,
+    [IDS.absoluteFloat64]: absoluteFloat64,
+    [IDS.sineFloat64]: sineFloat64,
+    [IDS.cosineFloat64]: cosineFloat64,
+    [IDS.atan2Float64]: atan2Float64,
+    [IDS.compareFloat64]: compareFloat64,
+    [IDS.nearStarIdentity]: nearStarIdentity,
+    [IDS.nearStarIdentityPermuted]: nearStarIdentityPermuted,
+    [IDS.nearStarIdentitySpill1]: nearStarIdentitySpill1,
+    [IDS.nearStarIdentitySpill2]: nearStarIdentitySpill2,
+    [IDS.nearStarIdentitySpill3]: nearStarIdentitySpill3,
+    [IDS.nearStarIdentitySpill4]: nearStarIdentitySpill4,
+    [IDS.nearStarIdentitySpillAll]: nearStarIdentitySpillAll,
+    [IDS.isThereIdentity]: isThereIdentity,
+    [IDS.product4]: product4,
+    [IDS.product4Spilled]: product4Spilled,
+    [IDS.saveNearStarChopControl]: saveNearStarChopControl,
+    [IDS.nearStarIdentityChop16]: nearStarIdentityChop16,
+    [IDS.enterGeometryChop]: enterGeometryChop,
+    [IDS.geometryKMulChop]: geometryKMulChop,
+    [IDS.geometryKMulChopSpilled]: geometryKMulChopSpilled,
+    [IDS.geometryTwoMulKChop]: geometryTwoMulKChop,
+    [IDS.geometrySeedTiltChop]: geometrySeedTiltChop,
+    [IDS.geometrySeedTiltChopSpilled]: geometrySeedTiltChopSpilled,
+    [IDS.geometryPlainChop]: geometryPlainChop,
+    [IDS.geometryPlainChop32]: geometryPlainChop32,
+    [IDS.geometryQuoMulChop]: geometryQuoMulChop,
+    [IDS.geometryQuoMulChopSpill1]: geometryQuoMulChopSpill1,
+    [IDS.geometryQuoMulChopSpill2]: geometryQuoMulChopSpill2,
+    [IDS.geometrySeedStore100]: geometrySeedStore100,
+    [IDS.geometryRatioStore50]: geometryRatioStore50,
+    [IDS.geometryRatioStore500]: geometryRatioStore500,
+    [IDS.geometryRatioStore5000]: geometryRatioStore5000,
+    [IDS.geometryEccentricityStore]: geometryEccentricityStore,
+    [IDS.geometryPlanetRayStore]: geometryPlanetRayStore,
+    [IDS.geometryMoonRayStore]: geometryMoonRayStore,
+    [IDS.geometrySurfaceSeedChop]: geometrySurfaceSeedChop,
+    [IDS.geometryAdd4112Chop]: geometryAdd4112Chop,
+    [IDS.missionWidenFloat32]: loadFloat32,
+    [IDS.spaceRelativeCoordinates]: spaceRelativeCoordinates,
+    [IDS.spaceRotateDepth]: spaceRotateDepth,
+    [IDS.spaceProject]: spaceProject,
     ...overrides,
   };
 }

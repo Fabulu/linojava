@@ -13,13 +13,23 @@ export const LAST_KERNEL_UNIT = KERNEL_UNITS - 1;
 export const COMMANDS = Object.freeze({
   IDLE: 0,
   RETRACE: 1,
+  READ_POINTER: 12,
   READ: 14,
   GET_DIR: 20,
+  READ_TIME: 27,
+  READ_UTC_TIME: 28,
+  READ_COUNTS: 29,
+  SLEEP: 35,
 });
 export const IDLE = COMMANDS.IDLE;
 export const RETRACE = COMMANDS.RETRACE;
 export const READ = COMMANDS.READ;
 export const GET_DIR = COMMANDS.GET_DIR;
+export const READ_POINTER = COMMANDS.READ_POINTER;
+export const READ_TIME = COMMANDS.READ_TIME;
+export const READ_UTC_TIME = COMMANDS.READ_UTC_TIME;
+export const READ_COUNTS = COMMANDS.READ_COUNTS;
+export const SLEEP = COMMANDS.SLEEP;
 export const DONE = 0x646f6e65;
 export const FAIL = 0x6661696c;
 
@@ -144,6 +154,7 @@ export function createIsoKernelMemory(initial = {}) {
   const memory = new Int32Array(KERNEL_UNITS);
   memory[OFFSETS.ProcessRAMtop] = KERNEL_UNITS;
   memory[OFFSETS.FileName] = 0;
+  memory[OFFSETS.CountsPerMillisecond] = 1000;
   for (const [name, value] of Object.entries(initial)) {
     const offset = OFFSETS[name] ?? (typeof name === "number" ? name : undefined);
     if (offset !== undefined) memory[offset] = value | 0;
@@ -162,8 +173,12 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
   const at = (offset) => kernelBase + offset;
   let success = true;
   let yielded = false;
+  let sleepMilliseconds = 0;
   const fileCommand = memory[at(OFFSETS.FileCommand)];
   const displayCommand = memory[at(OFFSETS.DisplayCommand)];
+  const pointerCommand = memory[at(OFFSETS.PointerCommand)];
+  const timerCommand = memory[at(OFFSETS.SYStimeCommand)];
+  const processCommand = memory[at(OFFSETS.ProcessCommand)];
   try {
     if (displayCommand === RETRACE) {
       const result = host.retrace?.(
@@ -171,8 +186,9 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
         memory[at(OFFSETS.DisplayHeight)], memory,
         { liveRegion: memory[at(OFFSETS.DisplayLiveRegion)] },
       );
-      yielded = result === true || result?.yield === true;
-    } else if (fileCommand === READ) {
+      yielded ||= result === true || result?.yield === true;
+    }
+    if (fileCommand === READ) {
       const source = host.stockfile ?? host.stockFile ?? [];
       const bytes = bytesFrom(source);
       const position = Math.max(0, memory[at(OFFSETS.FilePosition)] | 0);
@@ -197,9 +213,43 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
       memory[at(OFFSETS.FileSize)] = text.length;
       memory[at(OFFSETS.FileStatus)] = 1;
     }
+    if (pointerCommand === READ_POINTER) {
+      const pointer = typeof host.pointer === "function" ? host.pointer() : (host.pointer ?? {});
+      memory[at(OFFSETS.PointerStatus)] = pointer.status | 0;
+      memory[at(OFFSETS.PointerDeltaX)] = pointer.deltaX | 0;
+      memory[at(OFFSETS.PointerDeltaY)] = pointer.deltaY | 0;
+      memory[at(OFFSETS.PointerDeltaZ)] = pointer.deltaZ | 0;
+      memory[at(OFFSETS.PointerXCoordinate)] = pointer.x | 0;
+      memory[at(OFFSETS.PointerYCoordinate)] = pointer.y | 0;
+      memory[at(OFFSETS.PointerZCoordinate)] = pointer.z | 0;
+    }
+    if (timerCommand === READ_COUNTS) {
+      const countsPerMillisecond = Math.max(1, host.countsPerMillisecond | 0 || 1000);
+      const milliseconds = Number(host.monotonicMilliseconds?.() ?? globalThis.performance?.now?.() ?? Date.now());
+      memory[at(OFFSETS.CountsPerMillisecond)] = countsPerMillisecond;
+      memory[at(OFFSETS.SYStimeCounts)] = Math.trunc(milliseconds * countsPerMillisecond) | 0;
+    } else if (timerCommand === READ_TIME || timerCommand === READ_UTC_TIME) {
+      const supplied = host.date?.(timerCommand === READ_UTC_TIME);
+      const date = supplied instanceof Date ? supplied : new Date(supplied ?? Date.now());
+      const utc = timerCommand === READ_UTC_TIME;
+      memory[at(OFFSETS.SYStimeYear)] = utc ? date.getUTCFullYear() : date.getFullYear();
+      memory[at(OFFSETS.SYStimeMonth)] = utc ? date.getUTCMonth() + 1 : date.getMonth() + 1;
+      memory[at(OFFSETS.SYStimeDay)] = utc ? date.getUTCDate() : date.getDate();
+      memory[at(OFFSETS.SYStimeDayOfWeek)] = utc ? date.getUTCDay() : date.getDay();
+      memory[at(OFFSETS.SYStimeHour)] = utc ? date.getUTCHours() : date.getHours();
+      memory[at(OFFSETS.SYStimeMinute)] = utc ? date.getUTCMinutes() : date.getMinutes();
+      memory[at(OFFSETS.SYStimeSecond)] = utc ? date.getUTCSeconds() : date.getSeconds();
+      memory[at(OFFSETS.SYStimeMilliSeconds)] = utc ? date.getUTCMilliseconds() : date.getMilliseconds();
+    }
+    if (processCommand === SLEEP) {
+      const timeout = Math.max(0, memory[at(OFFSETS.SleepTimeout)] | 0);
+      const result = host.sleep?.(timeout);
+      sleepMilliseconds = Math.max(0, Number(result?.delay ?? result?.sleepMilliseconds ?? timeout) || 0);
+      yielded ||= result === undefined || result === true || result?.yield === true;
+    }
   } catch { success = false; memory[at(OFFSETS.FileStatus)] = 2; }
   for (const offset of COMMAND_SLOTS) memory[at(offset)] = IDLE;
-  return { success, failed: !success, yielded, status: success ? DONE : FAIL };
+  return { success, failed: !success, yielded, sleepMilliseconds, status: success ? DONE : FAIL };
 }
 
 export const createKernelMemory = createIsoKernelMemory;
