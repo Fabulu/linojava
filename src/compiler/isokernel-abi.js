@@ -223,6 +223,17 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
   const processCommand = memory[at(OFFSETS.ProcessCommand)];
   const globalKCommand = memory[at(OFFSETS.GlobalKCommand)];
   try {
+    const displaySync = host.syncDisplay?.({
+      origin: memory[at(OFFSETS.DisplayOrigin)] | 0,
+      width: memory[at(OFFSETS.DisplayWidth)] | 0,
+      height: memory[at(OFFSETS.DisplayHeight)] | 0,
+      physicalWidth: memory[at(OFFSETS.DisplayPhysicalWidth)] | 0,
+      physicalHeight: memory[at(OFFSETS.DisplayPhysicalHeight)] | 0,
+      x: memory[at(OFFSETS.DisplayXPosition)] | 0,
+      y: memory[at(OFFSETS.DisplayYPosition)] | 0,
+      status: memory[at(OFFSETS.DisplayStatus)] | 0,
+    });
+    if (displaySync === false || displaySync?.success === false) success = false;
     const keys = typeof host.keys === "function" ? host.keys() : host.keys;
     if (keys) {
       for (const [name, offset] of Object.entries(KEY_OFFSETS)) {
@@ -296,7 +307,9 @@ export function dispatchIsoKernel(memory, host = {}, options = {}) {
       memory[at(OFFSETS.FileStatus)] = 1;
     }
     if (pointerCommand === READ_POINTER) {
-      const pointer = typeof host.pointer === "function" ? host.pointer() : (host.pointer ?? {});
+      const pointer = typeof host.pointer === "function"
+        ? host.pointer({ mode: memory[at(OFFSETS.PointerMode)] | 0 })
+        : (host.pointer ?? {});
       memory[at(OFFSETS.PointerStatus)] = pointer.status | 0;
       memory[at(OFFSETS.PointerDeltaX)] = pointer.deltaX | 0;
       memory[at(OFFSETS.PointerDeltaY)] = pointer.deltaY | 0;

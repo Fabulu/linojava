@@ -15,10 +15,15 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   assert.deepEqual(COMMAND_OFFSETS, { Display: 32771, PCMdata: 32781, Console: 32790, Pointer: 32890, File: 32899, SYStime: 32906, Timer: 32906, APD: 32917, Printer: 32924, Process: 32928, Net: 32930, Network: 32930, GlobalK: 32941, Clip: 32944 });
   const memory = createIsoKernelMemory({ BlockPointer: 100, BlockSize: 3, FilePosition: 1, FileCommand: READ });
   assert.equal(memory[OFFSETS.CountsPerMillisecond], 1000);
-  const result = dispatchIsoKernel(memory, { stockfile: Uint8Array.from([7, 8, 9]) });
+  let syncedDisplay;
+  const result = dispatchIsoKernel(memory, {
+    stockfile: Uint8Array.from([7, 8, 9]),
+    syncDisplay: (display) => { syncedDisplay = display; },
+  });
   assert.equal(result.status, 0x646f6e65);
   assert.deepEqual(Array.from(new Uint8Array(memory.buffer).slice(400, 403)), [8, 9, 0]);
   assert.equal(memory[OFFSETS.FileCommand], 0);
+  assert.equal(syncedDisplay.width, 0);
   memory[OFFSETS.FileCommand] = GET_DIR;
   memory[OFFSETS.FileName] = 100;
   memory[OFFSETS.BlockSize] = 4;
@@ -55,11 +60,14 @@ test("published IsoKernel layout and bring-up dispatcher", () => {
   assert.equal(memory[KEY_OFFSETS.keyw], 0);
 
   memory[OFFSETS.PointerCommand] = READ_POINTER;
-  dispatchIsoKernel(memory, { pointer: { status: 5, x: 12, y: 34, deltaX: -2 } });
+  memory[OFFSETS.PointerMode] = 1;
+  let pointerMode = -1;
+  dispatchIsoKernel(memory, { pointer: ({ mode }) => { pointerMode = mode; return { status: 5, x: 12, y: 34, deltaX: -2 }; } });
   assert.deepEqual(
     [memory[OFFSETS.PointerStatus], memory[OFFSETS.PointerXCoordinate], memory[OFFSETS.PointerYCoordinate], memory[OFFSETS.PointerDeltaX]],
     [5, 12, 34, -2],
   );
+  assert.equal(pointerMode, 1);
 
   memory[OFFSETS.SYStimeCommand] = READ_COUNTS;
   dispatchIsoKernel(memory, { monotonicMilliseconds: () => 12.5, countsPerMillisecond: 1000 });
