@@ -1,6 +1,6 @@
 {
   "name": "@fabulu/linojava",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Ahead-of-time browser compiler and host runtime for L.in.oleum",
   "type": "module",
   "bin": {
@@ -13,7 +13,12 @@
     "./project": "./src/compiler/project-loader.js",
     "./declarations": "./src/compiler/declarations.js",
     "./expressions": "./src/compiler/expressions.js",
-    "./memory-layout": "./src/compiler/memory-layout.js"
+    "./memory-layout": "./src/compiler/memory-layout.js",
+    "./programme": "./src/compiler/programme.js",
+    "./operands": "./src/compiler/operands.js",
+    "./linker": "./src/compiler/linker.js",
+    "./project-compiler": "./src/compiler/project-compiler.js",
+    "./isokernel-abi": "./src/compiler/isokernel-abi.js"
   },
   "scripts": {
     "build:demo": "node ./bin/linojava.js ./examples/browser_probe.lino ./examples/browser_probe.js",

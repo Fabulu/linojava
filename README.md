@@ -46,18 +46,19 @@ byte fragments are never ignored or approximated. Noctis currently uses those
 fragments heavily, so the browser port will provide portable intrinsic forms
 for each one before claiming game compatibility.
 
-The project loader already resolves the unmodified `examples/iGUIcli.txt`
-source graph from the Linoleum tree: 14 modules, 23 stockfile assets, and 7,200
-statements. Module identity follows Lino's case-insensitive naming, so `Region`
-and `region` resolve to one library. The next frontend stage links those periods
-and declarations into the executable JavaScript IR; loading the graph alone is
-not yet an iGUI boot. The current layout pass resolves all 117 language,
-project, and stockfile constants, encodes 2,537 initialized units, and measures
-663,356 application-workspace units. Its remaining 54 initialized-data
-relocations are typed as 31 programme labels and 23 workspace addresses, with
-no unknown data expression silently replaced by zero. Custom resolvers may
-provide `moduleIdentity` and `stockfileIdentity` functions when their storage
-has different alias rules.
+The real project compiler now resolves and executes the unmodified
+`examples/iGUIcli.txt` graph from the Linoleum tree: 14 modules, 23 stockfile
+assets, 4,609 programme statements, and 714 labels. It uses the documented
+32-bit IsoKernel layout and reaches the first real `RETRACE` after the expected
+23 stockfile reads and one directory call. The 400 by 300 Lino framebuffer is
+deterministic and non-empty.
+
+Use `compileProject(entry, resolvers, options)` for linked Lino projects. The
+resolver callbacks can fetch source and stockfiles from URLs, browser `File`
+objects, a virtual filesystem, or a build tool. The older `compile(source)`
+entry remains available for small single-source programs. Browser presentation
+of the real iGUI framebuffer is the next product step; the current public site
+still runs the earlier probe.
 
 ## Project boundaries
 

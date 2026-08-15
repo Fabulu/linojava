@@ -63,6 +63,9 @@ CSS may frame a bring-up build but cannot substitute for Lino-rendered chrome.
 The public APIs are:
 
 - `compile(source, options)` for static JavaScript module generation;
+- `compileProject(entry, resolvers, options)` for linked multi-file Lino;
+- `linkProject(project, options)` and `compileLinkedProject(linked, host)` for
+  build tools and hosts that retain a linked image;
 - `compileInBrowser(source, options)` for cached ad hoc compilation;
 - `createProgramFromSource(source, host, options)`;
 - `createProgramFromElement(element, host, options)`;
@@ -86,18 +89,14 @@ is not permitted.
 
 ## First complete product wave
 
-The first complete browser wave ends at the actual iGUI, not the temporary
-probe. It must compile and link unmodified `examples/iGUIcli.txt`, its iGUI and
-`/gen` library closure, and stockfile assets; execute `Initialize Integrated
-GUI` through the first RETRACE; present deterministic Lino-drawn chrome; and
-accept a mapped pointer click that changes the Lino framebuffer. Analysis of
-the full Noctis entry must enumerate every unresolved intrinsic instead of
-stopping at the first native fragment.
+The first execution milestone is complete. The project compiler links the
+unmodified `examples/iGUIcli.txt`, all 14 modules, and all 23 stockfile assets.
+It parses and lowers all 4,609 programme statements and 714 labels, resolves
+all 54 code/workspace relocations, installs the published IsoKernel layout,
+and executes 23 stockfile reads, GET DIR, and RETRACE in their original order.
+The first 400 by 300 framebuffer is deterministic and non-empty.
 
-The first loader milestone is complete: the period-aware lexer and recursive
-resolver load the real iGUI client closure, including all 14 source modules and
-23 stockfile assets. The declaration pass resolves the complete constant and
-workspace-size set, preserves float32 expression semantics, encodes the Lino
-datascripts, and classifies every remaining relocation as programme or
-workspace linkage. Code-address assignment, the IsoKernel ABI, executable IR
-construction, and the host remain before that graph can draw its first frame.
+The next browser wave presents that framebuffer in Linoctis, replacing the
+temporary probe with Lino-drawn iGUI chrome, then maps a real pointer click
+back into Lino memory. Analysis of the full Noctis entry will enumerate every
+required portable intrinsic instead of ignoring native fragments.

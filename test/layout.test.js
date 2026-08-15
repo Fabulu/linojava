@@ -64,7 +64,9 @@ test("evaluates integer expressions left to right and preserves float literal bi
   assert.equal(evaluateExpression("100000f mtp 2 div 640"), floatBits(312.5));
   assert.equal(evaluateExpression("minus minus 3"), 3);
   assert.equal(evaluateExpression("minus plus 3"), -3);
-  assert.equal(evaluateExpression("3 as byte size"), 12);
+  assert.equal(evaluateExpression("3 as byte size"), 1);
+  assert.equal(evaluateExpression("5 as byte size"), 2);
+  assert.throws(() => evaluateExpression("minus 1 as byte size"), /Negative byte size/);
 });
 
 test("resolves constants lazily, including forward references", () => {

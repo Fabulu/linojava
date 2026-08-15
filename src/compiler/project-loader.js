@@ -2,6 +2,7 @@ import { groupPeriods, lexSource, periodStatements } from "./lexer.js";
 import { collectProjectDeclarations } from "./declarations.js";
 import { projectConstants, resolveConstants } from "./expressions.js";
 import { buildInitializedData, measureWorkspace } from "./memory-layout.js";
+import { canonicalCodeName } from "./programme.js";
 
 function normaliseSource(result, specifier) {
   if (typeof result === "string") return { id: String(specifier), source: result };
@@ -150,7 +151,7 @@ export async function inspectProject(entry, resolvers) {
     .filter((period) => period.name === "programme")
     .flatMap((period) => period.items
       .filter((item) => item.type === "label")
-      .map((item) => item.text.replace(/[\x00-\x20]+/g, "").toLowerCase()))));
+      .map((item) => canonicalCodeName(item.text)))));
   const initialized = buildInitializedData(declarations, constants, {
     codeLabels,
     workspaceSymbols: workspace.symbols,

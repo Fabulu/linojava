@@ -113,7 +113,8 @@ export function evaluateTypedExpression(text, resolve = () => undefined) {
   }
   if (byteSize) {
     if (value.kind !== "integer") throw new TypeError(`Float expression cannot use as byte size: ${text}`);
-    value = { kind: "integer", value: Math.imul(value.value, 4) | 0 };
+    if (value.value < 0) throw new RangeError(`Negative byte size in Lino expression: ${text}`);
+    value = { kind: "integer", value: Math.ceil(value.value / 4) | 0 };
   }
   return value;
 }
