@@ -134,6 +134,9 @@ const IDS = Object.freeze({
   paletteLoadShade: "native:supal.txt:68be862a",
   flareSaveControl: "native:vhflare.txt:ac3505ab",
   flareSpokeDelta: "native:vhflare.txt:d2478660",
+  projectMappedPolygon: "native:pgproj.txt:88618553",
+  projectMappedPoint: "native:pgproj.txt:29053a05",
+  terrainFacingDot: "native:pgproj.txt:625fae20",
 });
 
 const SERVICE_IDS = Object.freeze({
@@ -1092,6 +1095,144 @@ function duplicateMappedRotation(machine, linked) {
   memory[visibility + 3] = flag;
   const doFlag = address(linked, "PJdoflag");
   memory[doFlag] = (memory[doFlag] + flag) | 0;
+}
+
+function projectMappedPolygon(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const points = value(memory, linked, "PJmpbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const count = value(memory, linked, "PJvr2") >>> 0;
+  const minX = address(linked, "PJminx");
+  const maxX = address(linked, "PJmaxx");
+  const minY = address(linked, "BXminy");
+  const maxY = address(linked, "BXmaxy");
+  memory[minX] = 311;
+  memory[maxX] = 5;
+  memory[minY] = 190;
+  memory[maxY] = 10;
+  for (let vertex = 0; vertex < count; vertex += 1) {
+    let factor = scalarBinaryNumber(
+      readFloat64(memory, floats + 50),
+      readFloat64(memory, floats + 128 + vertex * 2),
+      control,
+      "divide",
+    );
+    writeFloat64(memory, floats + 502, factor);
+    let projected = scalarBinaryNumber(
+      factor,
+      readFloat64(memory, floats + 96 + vertex * 2),
+      control,
+      "multiply",
+    );
+    writeScalarScratch(machine, linked, projected);
+    projected = scalarBinaryNumber(
+      projected,
+      readFloat64(memory, floats + 38),
+      control,
+      "add",
+    );
+    writeScalarScratch(machine, linked, projected);
+    const x = convertToInt32(projected, control);
+    memory[points + vertex * 2] = x;
+    if (x < memory[minX]) memory[minX] = x;
+    if (x > memory[maxX]) memory[maxX] = x;
+
+    projected = scalarBinaryNumber(
+      factor,
+      readFloat64(memory, floats + 112 + vertex * 2),
+      control,
+      "multiply",
+    );
+    writeScalarScratch(machine, linked, projected);
+    projected = scalarBinaryNumber(
+      projected,
+      readFloat64(memory, floats + 40),
+      control,
+      "add",
+    );
+    writeScalarScratch(machine, linked, projected);
+    const y = convertToInt32(projected, control);
+    memory[points + vertex * 2 + 1] = y;
+    if (y < memory[minY]) memory[minY] = y;
+    if (y > memory[maxY]) memory[maxY] = y;
+  }
+  memory[address(linked, "PJvr")] = count;
+}
+
+function projectMappedPoint(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  const factor = scalarBinaryNumber(
+    readFloat64(memory, floats + 50),
+    readFloat64(memory, floats + 80),
+    control,
+    "divide",
+  );
+  writeFloat64(memory, floats + 502, factor);
+  for (const [source, center, output] of [
+    [64, 38, "GCx"],
+    [72, 40, "GCy"],
+  ]) {
+    let projected = scalarBinaryNumber(
+      factor,
+      readFloat64(memory, floats + source),
+      control,
+      "multiply",
+    );
+    writeScalarScratch(machine, linked, projected);
+    projected = scalarBinaryNumber(
+      projected,
+      readFloat64(memory, floats + center),
+      control,
+      "add",
+    );
+    writeScalarScratch(machine, linked, projected);
+    memory[address(linked, output)] = convertToInt32(projected, control);
+  }
+}
+
+function terrainFacingDot(machine, linked) {
+  const memory = machine.memory;
+  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const control = floatingPoint(machine).control;
+  let difference = scalarBinaryNumber(
+    readFloat64(memory, floats + 448),
+    readFloat64(memory, floats + 508),
+    control,
+    "subtract",
+  );
+  writeScalarScratch(machine, linked, difference);
+  let sum = scalarBinaryNumber(
+    difference,
+    readFloat64(memory, floats + 470),
+    control,
+    "multiply",
+  );
+  writeFloat64(memory, floats + 496, sum);
+  for (const [camera, vertex, normal, spillSum] of [
+    [450, 516, 472, true],
+    [452, 524, 474, false],
+  ]) {
+    difference = scalarBinaryNumber(
+      readFloat64(memory, floats + camera),
+      readFloat64(memory, floats + vertex),
+      control,
+      "subtract",
+    );
+    writeScalarScratch(machine, linked, difference);
+    let product = scalarBinaryNumber(
+      difference,
+      readFloat64(memory, floats + normal),
+      control,
+      "multiply",
+    );
+    writeScalarScratch(machine, linked, product);
+    sum = scalarBinaryNumber(product, sum, control, "add");
+    if (spillSum) writeFloat64(memory, floats + 496, sum);
+  }
+  writeScalarScratch(machine, linked, sum);
 }
 
 function enterFloatingPoint(machine, linked) {
@@ -2089,6 +2230,9 @@ export function createNoctisIntrinsics(overrides = {}) {
     [IDS.paletteLoadShade]: (machine, linked) => surfaceLoadFloat(machine, linked, "SFtmp"),
     [IDS.flareSaveControl]: flareSaveControl,
     [IDS.flareSpokeDelta]: flareSpokeDelta,
+    [IDS.projectMappedPolygon]: projectMappedPolygon,
+    [IDS.projectMappedPoint]: projectMappedPoint,
+    [IDS.terrainFacingDot]: terrainFacingDot,
     ...overrides,
   };
 }
