@@ -1,4 +1,7 @@
 import { groupPeriods, lexSource, periodStatements } from "./lexer.js";
+import { collectProjectDeclarations } from "./declarations.js";
+import { projectConstants, resolveConstants } from "./expressions.js";
+import { buildInitializedData, measureWorkspace } from "./memory-layout.js";
 
 function normaliseSource(result, specifier) {
   if (typeof result === "string") return { id: String(specifier), source: result };
@@ -106,7 +109,14 @@ export async function loadProject(entry, resolvers = {}) {
           throw new Error(`${item.sourceId}:${item.line}: Unable to resolve stockfile ${spec}: ${error.message}`, { cause: error });
         }
         const stockIdentity = stockfileIdentity(stockfile.id);
-        if (!stockfilesById.has(stockIdentity)) stockfilesById.set(stockIdentity, stockfile);
+        if (!stockfilesById.has(stockIdentity)) {
+          stockfilesById.set(stockIdentity, { ...stockfile, symbols: [spec], offset: 0 });
+        } else {
+          const linked = stockfilesById.get(stockIdentity);
+          if (!linked.symbols.some((symbol) => stockfileIdentity(symbol) === stockfileIdentity(spec))) {
+            linked.symbols.push(spec);
+          }
+        }
         record.stockfiles.push(stockfilesById.get(stockIdentity).id);
       }
 
@@ -119,6 +129,11 @@ export async function loadProject(entry, resolvers = {}) {
   };
 
   const root = await visit(entry);
+  let stockOffset = 0;
+  for (const stockfile of stockfilesById.values()) {
+    stockfile.offset = stockOffset;
+    stockOffset += stockfile.data.byteLength;
+  }
   return {
     entry: root.id,
     modules,
@@ -128,6 +143,18 @@ export async function loadProject(entry, resolvers = {}) {
 
 export async function inspectProject(entry, resolvers) {
   const project = await loadProject(entry, resolvers);
+  const declarations = collectProjectDeclarations(project);
+  const constants = resolveConstants(declarations, projectConstants(project));
+  const workspace = measureWorkspace(declarations, constants);
+  const codeLabels = new Set(project.modules.flatMap((module) => module.periods
+    .filter((period) => period.name === "programme")
+    .flatMap((period) => period.items
+      .filter((item) => item.type === "label")
+      .map((item) => item.text.replace(/[\x00-\x20]+/g, "").toLowerCase()))));
+  const initialized = buildInitializedData(declarations, constants, {
+    codeLabels,
+    workspaceSymbols: workspace.symbols,
+  });
   return {
     entry: project.entry,
     modules: project.modules.map((module) => ({
@@ -137,6 +164,29 @@ export async function inspectProject(entry, resolvers) {
       periods: module.periods.map((period) => period.name),
       statements: module.items.filter((item) => item.type === "statement").length,
     })),
-    stockfiles: project.stockfiles.map((stockfile) => ({ id: stockfile.id, bytes: stockfile.data.byteLength })),
+    stockfiles: project.stockfiles.map((stockfile) => ({
+      id: stockfile.id,
+      bytes: stockfile.data.byteLength,
+      offset: stockfile.offset,
+      symbols: [...stockfile.symbols],
+    })),
+    declarations: {
+      total: declarations.length,
+      named: declarations.filter((declaration) => declaration.type === "declaration" && declaration.name !== null).length,
+      continuations: declarations.filter((declaration) => declaration.type === "continuation").length,
+      extensions: declarations.filter((declaration) => declaration.type === "extend").length,
+    },
+    constants: constants.size,
+    initializedData: {
+      units: initialized.values.length,
+      symbols: initialized.symbols.size,
+      relocations: initialized.relocations.length,
+      unresolved: initialized.unresolved.length,
+      unresolvedByKind: Object.fromEntries(["code", "workspace", "data"].map((kind) => [
+        kind,
+        initialized.unresolved.filter((relocation) => relocation.kind === kind).length,
+      ])),
+    },
+    workspace: { units: workspace.units, symbols: workspace.symbols.size },
   };
 }

@@ -51,8 +51,13 @@ source graph from the Linoleum tree: 14 modules, 23 stockfile assets, and 7,200
 statements. Module identity follows Lino's case-insensitive naming, so `Region`
 and `region` resolve to one library. The next frontend stage links those periods
 and declarations into the executable JavaScript IR; loading the graph alone is
-not yet an iGUI boot. Custom resolvers may provide `moduleIdentity` and
-`stockfileIdentity` functions when their storage has different alias rules.
+not yet an iGUI boot. The current layout pass resolves all 117 language,
+project, and stockfile constants, encodes 2,537 initialized units, and measures
+663,356 application-workspace units. Its remaining 54 initialized-data
+relocations are typed as 31 programme labels and 23 workspace addresses, with
+no unknown data expression silently replaced by zero. Custom resolvers may
+provide `moduleIdentity` and `stockfileIdentity` functions when their storage
+has different alias rules.
 
 ## Project boundaries
 

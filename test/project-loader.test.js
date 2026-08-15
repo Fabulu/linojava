@@ -82,9 +82,9 @@ test("collects stockfile bytes once while preserving module and asset order", as
 
   assert.deepEqual(report.modules.map((module) => module.id), ["child", "entry"]);
   assert.deepEqual(report.stockfiles, [
-    { id: "shared.bin", bytes: 3 },
-    { id: "child.bin", bytes: 2 },
-    { id: "root.bin", bytes: 2 },
+    { id: "shared.bin", bytes: 3, offset: 0, symbols: ["shared.bin"] },
+    { id: "child.bin", bytes: 2, offset: 3, symbols: ["child.bin"] },
+    { id: "root.bin", bytes: 2, offset: 5, symbols: ["root.bin"] },
   ]);
 });
 

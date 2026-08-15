@@ -10,7 +10,10 @@
     ".": "./src/compiler.js",
     "./browser": "./src/browser.js",
     "./auto": "./src/auto.js",
-    "./project": "./src/compiler/project-loader.js"
+    "./project": "./src/compiler/project-loader.js",
+    "./declarations": "./src/compiler/declarations.js",
+    "./expressions": "./src/compiler/expressions.js",
+    "./memory-layout": "./src/compiler/memory-layout.js"
   },
   "scripts": {
     "build:demo": "node ./bin/linojava.js ./examples/browser_probe.lino ./examples/browser_probe.js",

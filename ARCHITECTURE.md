@@ -96,5 +96,8 @@ stopping at the first native fragment.
 
 The first loader milestone is complete: the period-aware lexer and recursive
 resolver load the real iGUI client closure, including all 14 source modules and
-23 stockfile assets. Declaration linking, executable IR construction, and the
-IsoKernel host remain before that graph can draw its first frame.
+23 stockfile assets. The declaration pass resolves the complete constant and
+workspace-size set, preserves float32 expression semantics, encodes the Lino
+datascripts, and classifies every remaining relocation as programme or
+workspace linkage. Code-address assignment, the IsoKernel ABI, executable IR
+construction, and the host remain before that graph can draw its first frame.
