@@ -330,6 +330,34 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
     pc: linked.entry, halted: false,
     profile: options.profileInstructions ? new Uint32Array(lowered.length) : null,
   };
+  machine.callCode = (handle, maxInstructions = 10000000) => {
+    const target = (handle | 0) - 1;
+    if (target < 0 || target >= lowered.length) {
+      throw new RangeError(`Invalid nested Lino code handle ${handle}`);
+    }
+    const outerPc = machine.pc | 0;
+    const sentinel = lowered.length;
+    if (machine.depth === machine.stack.length) {
+      const grown = new Int32Array(machine.stack.length * 2);
+      grown.set(machine.stack);
+      machine.stack = grown;
+    }
+    machine.stack[machine.depth++] = sentinel + 1;
+    machine.pc = target;
+    let executed = 0;
+    while ((machine.pc | 0) !== sentinel) {
+      if (executed >= maxInstructions) throw new RangeError("Nested Lino call exceeded its instruction budget");
+      const region = Math.floor((machine.pc | 0) / regionSize);
+      const runner = runners[region];
+      if (!runner) throw new RangeError(`Nested Lino call escaped to invalid PC ${machine.pc}`);
+      const result = runner(machine, maxInstructions - executed);
+      executed += result.instructions;
+      if (result.status === "transfer" || result.status === "budget") continue;
+      throw new Error(`Nested Lino call unexpectedly ${result.status} at PC ${machine.pc}`);
+    }
+    machine.pc = outerPc;
+    return executed;
+  };
   return {
     linked, machine,
     run(maxInstructions = 10000000) {
