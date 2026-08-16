@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileProject } from "../src/compiler/project-compiler.js";
-import { compileLinkedProject } from "../src/compiler/project-compiler.js";
+import {
+  compileProject, compileLinkedProject, emitStaticRunnerModule,
+} from "../src/compiler/project-compiler.js";
 import { linkProject } from "../src/compiler/linker.js";
 import { loadProject } from "../src/compiler/project-loader.js";
 
@@ -149,4 +150,33 @@ test("native fragments require explicit portable intrinsic implementations", asy
   });
   assert.equal(program.run(5).status, "halted");
   assert.equal(program.machine.A, 42);
+});
+
+test("static runner modules execute the same linked project without dynamic functions", async () => {
+  const source = `
+    "variables" result = 0;
+    "programme"
+      A = 21;
+      => Double;
+      [result] = A;
+      end;
+    "Double"
+      A * 2;
+      end;
+  `;
+  const project = await loadProject("static.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const moduleSource = emitStaticRunnerModule(linked, {}, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const dynamic = compileLinkedProject(linked, {}, { regionSize: 256 });
+  const precompiled = compileLinkedProject(linked, {}, {
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  assert.deepEqual(precompiled.run(20), dynamic.run(20));
+  assert.deepEqual(precompiled.machine, dynamic.machine);
 });
