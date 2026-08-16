@@ -178,5 +178,9 @@ test("static runner modules execute the same linked project without dynamic func
     },
   });
   assert.deepEqual(precompiled.run(20), dynamic.run(20));
-  assert.deepEqual(precompiled.machine, dynamic.machine);
+  const { callCode: precompiledCallCode, ...precompiledState } = precompiled.machine;
+  const { callCode: dynamicCallCode, ...dynamicState } = dynamic.machine;
+  assert.equal(typeof precompiledCallCode, "function");
+  assert.equal(typeof dynamicCallCode, "function");
+  assert.deepEqual(precompiledState, dynamicState);
 });
