@@ -180,7 +180,9 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   memory.fill(4, 1_200_000, 1_200_000 + 58_000);
   run(IDS.smoothStarPage);
   assert.equal(memory[1_200_320], 4);
-  assert.equal(memory[1_200_321], 5);
+  // The native back-edge clears EBP for every destination. A carried
+  // accumulator would incorrectly raise this second constant-field pixel.
+  assert.equal(memory[1_200_321], 4);
 
   linked.symbols.get(canonicalName("SADPT")).value = 1_300_000;
   memory.set([1, 2, 3, 3], 1_300_010);
