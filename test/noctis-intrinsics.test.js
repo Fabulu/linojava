@@ -39,13 +39,45 @@ function fixture() {
     "gcFivp0", "gcTent0", "gc41120",
     "VHSstarptr", "VHSfwbase", "VHSdx0", "VHSdy0", "VHSdz0", "VHSdepth",
     "GCx", "GCy",
+    "rgt", "GBbubble", "GBmag", "GBcx", "GBcy", "GBdstreg", "SAr",
+    "SArs", "SAtcx", "SAtcy", "SAdif", "SAx1", "SAy1", "SAx2", "SAy2",
+    "SApx", "SApy", "SAcp", "SAp0", "SAp1", "SAp2", "SAp3", "SAavg",
+    "GBt", "SFMAG", "SFRX", "SFRY", "SFRZ", "SFZ2",
+    "VHGNDvecindex", "VHGNDvecowner", "VHGNDmass0", "VHGNDorbit0",
+    "VHGNDangle0", "VHGNDsin0", "VHGNDcos0", "VHGNDct0", "VHGNDxx0",
+    "VHGNDzz0", "VHGNDso0", "VHGNDco0", "VHGNDvecx0", "VHGNDvecy0",
+    "VHGNDvecz0", "nsstarray", "nspowner", "nspray", "nsporbray",
+    "nsporbtlt", "nsporbecc", "nspororient", "SUsec0",
+    "String", "Ink", "Text X", "Text Y", "Text Effect", "Text Display Width",
+    "Text Display Height", "Text Display Origin", "Text Region", "Text Window",
+    "Text Word Wrap", "Text Ghost Mode", "Text TAB Size", "Text Intercharspacing",
+    "Text Interlinespacing", "Text Highlight Start", "Text Highlight Stop",
+    "STD Font Alignment", "STD Font Body", "STD Font Width", "STD Font Shape",
+    "Width Of Latest Form", "Height Of Latest Form", "STD HL", "STD Current character X",
+    "STD Current character Y", "STD Offset to current character in string", "STD Dot X",
+    "STD Dot Y", "STD Stop X", "STD Stop Y", "STD Current shape unit", "STD Dot Mask",
+    "STD Window Left", "STD Window Top", "STD Window Right", "STD Window Bottom",
+    "STD Prescent X", "STD Prescent offset", "STD Width Correction", "STD Height Correction",
+    "Rectangle Target Layer", "Rectangle Display Alignment", "Rectangle Bounds",
+    "Rectangle Gradients", "Rectangle Effect", "RECT H Start Red", "RECT H Start Green",
+    "RECT H Start Blue", "RECT H Delta Red", "RECT H Delta Green", "RECT H Delta Blue",
+    "RECT V Start Red", "RECT V Start Green", "RECT V Start Blue", "RECT V Delta Red",
+    "RECT V Delta Green", "RECT V Delta Blue", "RECT Pixels", "RECT Scanlines",
+    "RECT Display Pointer", "FX Transparent Color", "FX Filter Color", "Display Width",
+    "TGA Target Layer", "TGA Picture Data", "TGA Display Alignment", "TGA Display Width",
+    "TGA Display Height", "TGA Picture Left", "TGA Picture Top", "TGA Effect",
+    "Bit Stream Pointer", "Starting Bit Number", "Bit Field Size", "Bit Field Content",
+    "LTP Pixels", "LTP Scanlines", "LTP Current Pixel", "LTP Current Scanline",
+    "LTP Current Pixel Pointer", "LTP Reverse Horiz", "LTP Forward Vert",
+    "LTP Bit Field Delta X", "LTP Bit Field Delta Y", "LTP ID Block Size",
+    "LTP Header Data", "LTP Colormap Size", "LTP Colormap Data",
   ];
   const symbols = new Map(names.map((name, index) => [
     canonicalName(name),
     { name, value: index + 1 },
   ]));
   return {
-    linked: { symbols },
+    linked: { symbols, labels: new Map() },
     machine: {
       memory: new Int32Array(2_000_000),
       A: 0,
@@ -590,4 +622,131 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   memory[at("FI")] = -7;
   run(SERVICES.pgfFromInteger);
   assert.equal(view.getFloat64(at("FA0") * 4, true), -7);
+});
+
+test("glass bubble truncates displacement before adding its integer centre", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  linked.symbols.get(canonicalName("nw")).value = 0;
+  memory[at("GBbubble")] = 1;
+  memory[at("GBmag")] = 1061997773; // binary32 0.800000011920929
+  memory[at("GBcx")] = 158;
+  memory[at("GBcy")] = 100;
+  memory[at("GBdstreg")] = 2;
+  memory[at("rgt") + 2 * 4 + 1] = 500_000;
+
+  intrinsic[SERVICES.glassBubble](machine, linked);
+
+  assert.equal(memory[at("SAtcx")], 245);
+  assert.equal(memory[at("SAtcy")], 100);
+  assert.equal(memory[at("SAx1")], 251);
+  assert.equal(memory[at("SAy1")], 106);
+});
+
+test("body-vector cache invalidates when a system changes at the same clock time", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const view = new DataView(memory.buffer);
+  [
+    "VHGNDvecindex", "VHGNDvecowner", "VHGNDmass0", "VHGNDorbit0",
+    "VHGNDangle0", "VHGNDsin0", "VHGNDcos0", "VHGNDct0", "VHGNDxx0",
+    "VHGNDzz0", "VHGNDso0", "VHGNDco0", "VHGNDvecx0", "VHGNDvecy0",
+    "VHGNDvecz0", "nsstarray", "nspowner", "nspray", "nsporbray",
+    "nsporbtlt", "nsporbecc", "nspororient", "SUsec0",
+  ].forEach((name, index) => {
+    linked.symbols.get(canonicalName(name)).value = 10_000 + index * 100;
+  });
+  memory[at("VHGNDvecindex")] = 0;
+  memory[at("nspowner")] = -1;
+  view.setFloat32(at("nsstarray") * 4, 1_000, true);
+  view.setFloat64(at("SUsec0") * 4, 12345, true);
+  view.setFloat64(at("nsporbray") * 4, 5_000, true);
+  view.setFloat64(at("nsporbtlt") * 4, 10, true);
+  view.setFloat64(at("nsporbecc") * 4, 1, true);
+  view.setFloat64(at("nspororient") * 4, 0.25, true);
+
+  intrinsic[SERVICES.bodyVector](machine, linked);
+  const firstX = view.getFloat64(at("VHGNDvecx0") * 4, true);
+  view.setFloat64(at("nsporbray") * 4, 7_000, true);
+  intrinsic[SERVICES.bodyVector](machine, linked);
+  const secondX = view.getFloat64(at("VHGNDvecx0") * 4, true);
+
+  assert.notEqual(secondX, firstX);
+  assert.equal(view.getFloat64(at("VHGNDorbit0") * 4, true), 7_000);
+});
+
+test("standard text publishes the source glyph-loop scratch state", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  memory[at("String")] = 100_000;
+  memory[100_000] = 65;
+  memory[100_001] = 0;
+  memory[at("Text Display Origin")] = 200_000;
+  memory[at("Text Display Width")] = 10;
+  memory[at("Text Display Height")] = 10;
+  memory[at("Text X")] = 1;
+  memory[at("Text Y")] = 1;
+  memory[at("STD Font Alignment")] = 16;
+  memory[at("STD Font Body")] = 2;
+  memory[at("STD Font Width")] = 2;
+  memory[at("STD Font Shape")] = 300_000;
+
+  intrinsic[SERVICES.standardText](machine, linked);
+
+  assert.equal(memory[at("STD Dot X")], 3);
+  assert.equal(memory[at("STD Dot Y")], 3);
+  assert.equal(memory[at("STD Stop X")], 3);
+  assert.equal(memory[at("STD Stop Y")], 3);
+  assert.equal(memory[at("STD Current shape unit")], 300_097);
+});
+
+test("TGA loader preserves the source bitfield and scan cursors", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const tgaNames = [
+    "TGA Target Layer", "TGA Picture Data", "TGA Display Alignment", "TGA Display Width",
+    "TGA Display Height", "TGA Picture Left", "TGA Picture Top", "TGA Effect",
+    "Bit Stream Pointer", "Starting Bit Number", "Bit Field Size", "Bit Field Content",
+    "LTP Pixels", "LTP Scanlines", "LTP Current Pixel", "LTP Current Scanline",
+    "LTP Current Pixel Pointer", "LTP Reverse Horiz", "LTP Forward Vert",
+    "LTP Bit Field Delta X", "LTP Bit Field Delta Y", "LTP ID Block Size",
+    "LTP Header Data", "LTP Colormap Size", "LTP Colormap Data",
+  ];
+  tgaNames.forEach((name, index) => {
+    linked.symbols.get(canonicalName(name)).value = 10_000 + index * 100;
+  });
+  linked.labels.set(canonicalName("FX Raw"), 0);
+  const data = 300_000;
+  const target = 400_000;
+  const bytes = new Uint8Array(memory.buffer, data * 4, 21);
+  bytes.fill(0);
+  bytes[2] = 2;
+  bytes[12] = 1;
+  bytes[14] = 1;
+  bytes[16] = 24;
+  bytes[18] = 3;
+  bytes[19] = 2;
+  bytes[20] = 1;
+  memory[at("TGA Target Layer")] = target;
+  memory[at("TGA Picture Data")] = data;
+  memory[at("TGA Display Alignment")] = 10;
+  memory[at("TGA Display Width")] = 10;
+  memory[at("TGA Display Height")] = 10;
+  memory[at("TGA Picture Left")] = 2;
+  memory[at("TGA Picture Top")] = 3;
+  memory[at("TGA Effect")] = 1;
+
+  intrinsic[SERVICES.loadTgaPicture](machine, linked);
+
+  assert.equal(memory[target + 32], 0x010203);
+  assert.equal(memory[at("Bit Field Content")], 0x010203);
+  assert.equal(memory[at("LTP Pixels")], 1);
+  assert.equal(memory[at("LTP Scanlines")], 1);
+  assert.equal(memory[at("LTP Current Pixel")], 3);
+  assert.equal(memory[at("LTP Current Scanline")], 4);
+  assert.equal(memory[at("LTP Current Pixel Pointer")], target + 42);
 });
