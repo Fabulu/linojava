@@ -261,6 +261,7 @@ const SERVICE_IDS = Object.freeze({
   surroundingCompass: "service:vhgndcompass",
   surroundingHudString: "service:vhgndhuddrawstring",
   loadTgaPicture: "service:loadtgapicture",
+  tileRegion: "service:tileregion",
   standardText: "service:stdwrite",
   searchEkeySession: "service:searchekeysessionslot",
   backupEkeySession: "service:backupekeysession",
@@ -9022,6 +9023,121 @@ function loadTgaPicture(machine, linked) {
   machine.X = LINO_DONE;
 }
 
+const tileRegionAddressCaches = new WeakMap();
+
+function tileRegionAddresses(linked) {
+  let cached = tileRegionAddressCaches.get(linked);
+  if (cached) return cached;
+  const names = [
+    "TR Bounds", "TR Picture Data", "TR Target Layer", "TR Display Alignment", "TR Effect",
+    "TGA Effect", "TGA Target Layer", "TGA Display Alignment", "TGA Display Width",
+    "TGA Display Height", "TGA Picture Data", "TGA Picture Left", "TGA Picture Top",
+    "LTP Pixels", "LTP Scanlines",
+  ];
+  cached = Object.fromEntries(names.map((name) => [canonicalName(name), address(linked, name)]));
+  tileRegionAddressCaches.set(linked, cached);
+  return cached;
+}
+
+function tileRegion(machine, linked) {
+  const memory = machine.memory;
+  const p = tileRegionAddresses(linked);
+  const bounds = memory[p.trbounds] >>> 0;
+  if (bounds === 0 || bounds + 3 >= memory.length) {
+    machine.X = LINO_DONE;
+    return;
+  }
+  const saved = [
+    p.tgaeffect, p.tgatargetlayer, p.tgadisplayalignment, p.tgadisplaywidth,
+    p.tgadisplayheight, p.tgapicturedata, p.tgapictureleft, p.tgapicturetop,
+  ].map((location) => memory[location] | 0);
+  const left = memory[bounds] | 0;
+  const top = memory[bounds + 1] | 0;
+  const right = memory[bounds + 2] | 0;
+  const bottom = memory[bounds + 3] | 0;
+  memory[p.tgaeffect] = memory[p.treffect] | 0;
+  memory[p.tgatargetlayer] = memory[p.trtargetlayer] | 0;
+  memory[p.tgadisplayalignment] = memory[p.trdisplayalignment] | 0;
+  memory[p.tgadisplaywidth] = (right + 1) | 0;
+  memory[p.tgadisplayheight] = (bottom + 1) | 0;
+  memory[p.tgapicturedata] = memory[p.trpicturedata] | 0;
+  memory[p.tgapictureleft] = left;
+  memory[p.tgapicturetop] = top;
+  machine.A = bounds | 0;
+  const effect = pixelEffects(linked).get(memory[p.tgaeffect] | 0);
+  if (effect?.kind === "raw" && !effect.transparent && left >= 0 && top >= 0) {
+    loadTgaPicture(machine, linked);
+    const pixels = memory[p.ltppixels] | 0;
+    const scanlines = memory[p.ltpscanlines] | 0;
+    const alignment = memory[p.tgadisplayalignment] | 0;
+    const displayWidth = memory[p.tgadisplaywidth] | 0;
+    const displayHeight = memory[p.tgadisplayheight] | 0;
+    if (machine.X === LINO_DONE && pixels > 0 && scanlines > 0
+        && left + pixels <= displayWidth && left + pixels <= alignment
+        && top + scanlines <= displayHeight) {
+      const tile = new Int32Array(pixels * scanlines);
+      for (let row = 0; row < scanlines; row += 1) {
+        const source = (memory[p.tgatargetlayer] >>> 0) + (top + row) * alignment + left;
+        tile.set(memory.subarray(source, source + pixels), row * pixels);
+      }
+      let lastLeft = left;
+      let lastTop = top;
+      for (let tileTop = top; tileTop <= bottom; tileTop += scanlines) {
+        lastTop = tileTop;
+        const rows = Math.min(scanlines, bottom + 1 - tileTop);
+        for (let tileLeft = left; tileLeft <= right; tileLeft += pixels) {
+          lastLeft = tileLeft;
+          const columns = Math.min(pixels, right + 1 - tileLeft, alignment - tileLeft);
+          if (columns <= 0) continue;
+          for (let row = 0; row < rows; row += 1) {
+            const destination = (memory[p.tgatargetlayer] >>> 0)
+              + (tileTop + row) * alignment + tileLeft;
+            memory.set(tile.subarray(row * pixels, row * pixels + columns), destination);
+          }
+        }
+      }
+      // Re-run only the final tile so the documented TGA/LTP scratch state is
+      // identical to the source loop as well as the visible region.
+      memory[p.tgapictureleft] = lastLeft;
+      memory[p.tgapicturetop] = lastTop;
+      loadTgaPicture(machine, linked);
+      [
+        p.tgaeffect, p.tgatargetlayer, p.tgadisplayalignment, p.tgadisplaywidth,
+        p.tgadisplayheight, p.tgapicturedata, p.tgapictureleft, p.tgapicturetop,
+      ].forEach((location, index) => { memory[location] = saved[index]; });
+      machine.X = LINO_DONE;
+      return;
+    }
+    memory[p.tgapictureleft] = left;
+    memory[p.tgapicturetop] = top;
+  }
+  let stop = false;
+  while (!stop) {
+    memory[p.tgapictureleft] = left;
+    while (true) {
+      loadTgaPicture(machine, linked);
+      const pixels = memory[p.ltppixels] | 0;
+      const scanlines = memory[p.ltpscanlines] | 0;
+      if (pixels <= 0 || scanlines <= 0) {
+        stop = true;
+        break;
+      }
+      const nextLeft = ((memory[p.tgapictureleft] | 0) + pixels) | 0;
+      memory[p.tgapictureleft] = nextLeft;
+      if (nextLeft > right) break;
+    }
+    if (stop) break;
+    const nextTop = ((memory[p.tgapicturetop] | 0) + (memory[p.ltpscanlines] | 0)) | 0;
+    memory[p.tgapicturetop] = nextTop;
+    if (nextTop > bottom) break;
+  }
+  [
+    p.tgaeffect, p.tgatargetlayer, p.tgadisplayalignment, p.tgadisplaywidth,
+    p.tgadisplayheight, p.tgapicturedata, p.tgapictureleft, p.tgapicturetop,
+  ].forEach((location, index) => { memory[location] = saved[index]; });
+  machine.X = LINO_DONE;
+}
+
 function textAddresses(linked) {
   let cached = textAddressCaches.get(linked);
   if (cached) return cached;
@@ -10899,6 +11015,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.surroundingCompass]: surroundingCompass,
     [SERVICE_IDS.surroundingHudString]: surroundingHudString,
     [SERVICE_IDS.loadTgaPicture]: loadTgaPicture,
+    [SERVICE_IDS.tileRegion]: tileRegion,
     [SERVICE_IDS.standardText]: standardText,
     [SERVICE_IDS.searchEkeySession]: searchEkeySession,
     [SERVICE_IDS.backupEkeySession]: backupEkeySession,

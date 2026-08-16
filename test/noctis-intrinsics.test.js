@@ -66,6 +66,7 @@ function fixture() {
     "RECT Display Pointer", "FX Transparent Color", "FX Filter Color", "Display Width",
     "TGA Target Layer", "TGA Picture Data", "TGA Display Alignment", "TGA Display Width",
     "TGA Display Height", "TGA Picture Left", "TGA Picture Top", "TGA Effect",
+    "TR Bounds", "TR Picture Data", "TR Target Layer", "TR Display Alignment", "TR Effect",
     "Bit Stream Pointer", "Starting Bit Number", "Bit Field Size", "Bit Field Content",
     "LTP Pixels", "LTP Scanlines", "LTP Current Pixel", "LTP Current Scanline",
     "LTP Current Pixel Pointer", "LTP Reverse Horiz", "LTP Forward Vert",
@@ -749,6 +750,40 @@ test("TGA loader preserves the source bitfield and scan cursors", () => {
   assert.equal(memory[at("LTP Current Pixel")], 3);
   assert.equal(memory[at("LTP Current Scanline")], 4);
   assert.equal(memory[at("LTP Current Pixel Pointer")], target + 42);
+});
+
+test("TGA region tiling batches raw one-pixel GUI fills", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  linked.labels.set(canonicalName("FX Raw"), 0);
+  const data = 300_000;
+  const target = 400_000;
+  const bounds = 500_000;
+  const bytes = new Uint8Array(memory.buffer, data * 4, 24);
+  bytes.fill(0);
+  bytes[2] = 2;
+  bytes[12] = 2;
+  bytes[14] = 1;
+  bytes[16] = 24;
+  bytes.set([3, 2, 1, 6, 5, 4], 18);
+  memory.set([1, 1, 5, 2], bounds);
+  memory[at("TR Bounds")] = bounds;
+  memory[at("TR Picture Data")] = data;
+  memory[at("TR Target Layer")] = target;
+  memory[at("TR Display Alignment")] = 8;
+  memory[at("TR Effect")] = 1;
+  memory[at("TGA Picture Left")] = 77;
+  memory[at("TGA Picture Top")] = 88;
+
+  intrinsic[SERVICES.tileRegion](machine, linked);
+
+  assert.deepEqual([...memory.slice(target + 9, target + 14)],
+    [0x010203, 0x040506, 0x010203, 0x040506, 0x010203]);
+  assert.deepEqual([...memory.slice(target + 17, target + 22)],
+    [0x010203, 0x040506, 0x010203, 0x040506, 0x010203]);
+  assert.equal(memory[at("TGA Picture Left")], 77);
+  assert.equal(memory[at("TGA Picture Top")], 88);
 });
 
 test("rectangle restores its source pixel counter after each scanline", () => {
