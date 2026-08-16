@@ -2812,7 +2812,8 @@ function polymapAddresses(linked) {
     "PGtexi", "PGtexv", "PGtmp", "PGdi", "PGval", "PGi", "PGj", "CSpix",
     "EWvr22", "EWminy", "EWmaxy", "EWsi", "EWx1", "EWy1", "EWx2", "EWy2",
     "EWity", "EWjty", "EWax", "EWcx", "EWh", "FS16", "FSVX", "FSVY",
-    "FSVZ", "FSK1", "FSK2", "FSK3", "D64THLO", "D64THHI", "D64QLO",
+    "FSVZ", "FSK1", "FSK2", "FSK3", "FSK4", "FSX", "FSY", "FSZ", "FSTX", "FSTY",
+    "D64THLO", "D64THHI", "D64QLO",
     "D64QHI", "PJthird0", "PJthird1", "ipart", "fpart", "nw", "SADPT",
     "RPSM", "RPBG", "RNGLB", "PGSCRT", "PGSCRE", "PGDOFF",
     "PGUVZ", "PGUVX", "PGUVY", "PGUVK4",
@@ -3945,35 +3946,35 @@ function terrainUvNext(machine, linked, p = null) {
   const control = floatingPoint(machine).control;
   const nearest = (control & 0x0c00) === 0;
   const view = dataView(memory);
-  let z = readFloat64View(view, floats + 30) + readFloat64View(view, floats + 22);
-  writeFloat64View(view, floats + 48, z);
+  let z = readFloat64View(view, floats + p.FSZ * 2) + readFloat64View(view, floats + p.FSK3 * 2);
+  writeFloat64View(view, floats + p.FSW0 * 2, z);
   let narrowed = nearest ? Math.fround(z) : roundFloat32(z, control);
   memory[p.PGUVZ] = float32Bits(narrowed);
-  writeFloat64View(view, floats + 30, narrowed);
-  let x = readFloat64View(view, floats + 26) + readFloat64View(view, floats + 18);
-  writeFloat64View(view, floats + 50, x);
+  writeFloat64View(view, floats + p.FSZ * 2, narrowed);
+  let x = readFloat64View(view, floats + p.FSX * 2) + readFloat64View(view, floats + p.FSK1 * 2);
+  writeFloat64View(view, floats + p.FSW1 * 2, x);
   narrowed = nearest ? Math.fround(x) : roundFloat32(x, control);
   memory[p.PGUVX] = float32Bits(narrowed);
-  writeFloat64View(view, floats + 26, narrowed);
-  let y = readFloat64View(view, floats + 28) + readFloat64View(view, floats + 20);
-  writeFloat64View(view, floats + 52, y);
+  writeFloat64View(view, floats + p.FSX * 2, narrowed);
+  let y = readFloat64View(view, floats + p.FSY * 2) + readFloat64View(view, floats + p.FSK2 * 2);
+  writeFloat64View(view, floats + p.FSW2 * 2, y);
   narrowed = nearest ? Math.fround(y) : roundFloat32(y, control);
   memory[p.PGUVY] = float32Bits(narrowed);
-  writeFloat64View(view, floats + 28, narrowed);
-  let reciprocal = readFloat64View(view, floats + 36) / z;
-  writeFloat64View(view, floats + 54, reciprocal);
+  writeFloat64View(view, floats + p.FSY * 2, narrowed);
+  let reciprocal = readFloat64View(view, floats + p.FSUNO * 2) / z;
+  writeFloat64View(view, floats + p.FSW3 * 2, reciprocal);
   reciprocal = nearest ? Math.fround(reciprocal) : roundFloat32(reciprocal, control);
   memory[p.PGUVK4] = float32Bits(reciprocal);
-  writeFloat64View(view, floats + 24, reciprocal);
-  let result = x * readFloat64View(view, floats + 32);
-  writeFloat64View(view, floats + 54, result);
+  writeFloat64View(view, floats + p.FSK4 * 2, reciprocal);
+  let result = x * readFloat64View(view, floats + p.FSTX * 2);
+  writeFloat64View(view, floats + p.FSW3 * 2, result);
   result *= reciprocal;
-  writeFloat64View(view, floats + 54, result);
+  writeFloat64View(view, floats + p.FSW3 * 2, result);
   memory[p.SPun] = convertToInt32(result, control);
-  result = y * readFloat64View(view, floats + 34);
-  writeFloat64View(view, floats + 54, result);
+  result = y * readFloat64View(view, floats + p.FSTY * 2);
+  writeFloat64View(view, floats + p.FSW3 * 2, result);
   result *= reciprocal;
-  writeFloat64View(view, floats + 54, result);
+  writeFloat64View(view, floats + p.FSW3 * 2, result);
   memory[p.SPvn] = convertToInt32(result, control);
 }
 
