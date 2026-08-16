@@ -272,12 +272,14 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
   const runners = [];
   for (let start = 0; start < lowered.length; start += regionSize) {
     const instructions = lowered.slice(start, Math.min(start + regionSize, lowered.length));
-    runners.push(new Function("dispatch", "native", emitRunner(linked, {
+    const source = emitRunner(linked, {
       instructions, serviceIntrinsicIds, serviceInlines,
       batchBudgets: options.batchBudgets, profileInstructions: options.profileInstructions,
       branchFallthrough: options.branchFallthrough,
       transfer: true,
-    }))(dispatch, native));
+    });
+    runners.push(new Function("dispatch", "native",
+      `${source}\n//# sourceURL=lino-region-${start}.js`)(dispatch, native));
   }
   const machine = {
     memory: new Int32Array(linked.initialMemory),
