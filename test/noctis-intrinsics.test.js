@@ -15,6 +15,8 @@ function fixture() {
     "VHGUIrow2p", "VHGUIgap", "VHGUIdw", "VHGUIdh", "VHGUIsy",
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
     "VHTcyclebase", "nw",
+    "RADPT", "VHGNDmushinner", "VHGNDmushcolmask", "VHGNDmushbase",
+    "VHGNDmushoff",
     "VHTsmoothbase", "SPcpfrom", "SPcpto", "PVj", "SCcx", "SCdi",
     "SCal", "SCzf", "DBal", "CSbyte", "SGpi", "SGpf", "SGgx", "SGgy",
     "SGa", "SGb", "SGt", "DBdi", "DBcx", "DBdl",
@@ -626,6 +628,30 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   memory[at("FI")] = -7;
   run(SERVICES.pgfFromInteger);
   assert.equal(view.getFloat64(at("FA0") * 4, true), -7);
+});
+
+test("greenmush stamps the Noctis framebuffer rather than workspace memory", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  linked.symbols.get(canonicalName("nw")).value = 100_000;
+  linked.symbols.get(canonicalName("RADPT")).value = 20_000;
+  memory[at("VHGNDmushinner")] = 1;
+  memory[at("VHGNDmushcolmask")] = 31;
+  memory[at("VHGNDmushbase")] = 192;
+  memory[at("GCx")] = 30;
+  memory[at("GCy")] = 30;
+  memory[at("SUfseed")] = 12345;
+
+  intrinsic[IDS.landedMushroomPixels](machine, linked);
+
+  const offset = memory[at("VHGNDmushoff")];
+  const colour = memory[at("SUfval")] + 192;
+  const page = 120_000;
+  for (const displacement of [0, 1, -1, 320, -320, -640]) {
+    assert.equal(memory[page + offset + displacement], colour);
+    assert.equal(memory[20_000 + offset + displacement], 0);
+  }
 });
 
 test("glass bubble truncates displacement before adding its integer centre", () => {
