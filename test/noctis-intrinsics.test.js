@@ -775,3 +775,72 @@ test("rectangle restores its source pixel counter after each scanline", () => {
   assert.equal(memory[at("RECT Pixels")], 3);
   assert.equal(memory[at("RECT Scanlines")], 0);
 });
+
+test("mapped UV stepping keeps wide temporaries out of camera slots", () => {
+  const fixed = new Map(Object.entries({
+    fw: 10_000,
+    pgfwbase: 500,
+    fsz: 15,
+    fsx: 13,
+    fsy: 14,
+    fsk1: 9,
+    fsk2: 10,
+    fsk3: 11,
+    fsk4: 12,
+    fstx: 16,
+    fsty: 17,
+    fsuno: 18,
+    fsw0: 248,
+    fsw1: 249,
+    fsw2: 250,
+    fsw3: 251,
+    pguvz: 520,
+    pguvx: 521,
+    pguvy: 522,
+    pguvk4: 523,
+    spun: 524,
+    spvn: 525,
+  }).map(([name, value]) => [canonicalName(name), { name, value }]));
+  let nextAddress = 600;
+  const linked = {
+    labels: new Map(),
+    symbols: {
+      get(name) {
+        const key = canonicalName(name);
+        if (!fixed.has(key)) fixed.set(key, { name, value: nextAddress++ });
+        return fixed.get(key);
+      },
+    },
+  };
+  const machine = {
+    memory: new Int32Array(20_000),
+    A: 0, B: 0, C: 0, D: 0, E: 0, X: 0,
+    fpu: { control: 0x037f, status: 0, stack: [] },
+  };
+  const memory = machine.memory;
+  const view = new DataView(memory.buffer);
+  const at = (name) => linked.symbols.get(canonicalName(name)).value;
+  const write = (slot, value) => view.setFloat64((at("fw") + slot * 2) * 4, value, true);
+  const read = (slot) => view.getFloat64((at("fw") + slot * 2) * 4, true);
+  memory[at("PGfwbase")] = at("fw");
+  write(at("FSZ"), 10);
+  write(at("FSX"), 20);
+  write(at("FSY"), 30);
+  write(at("FSK1"), 3);
+  write(at("FSK2"), 4);
+  write(at("FSK3"), 2);
+  write(at("FSUNO"), 1);
+  write(at("FSTX"), 256);
+  write(at("FSTY"), 128);
+  const cameraSentinels = [11.25, 210, 77.5, 100];
+  cameraSentinels.forEach((value, index) => write(24 + index, value));
+
+  createNoctisIntrinsics()[IDS.terrainUvNext](machine, linked);
+
+  assert.deepEqual([read(24), read(25), read(26), read(27)], cameraSentinels);
+  assert.equal(read(at("FSW0")), 12);
+  assert.equal(read(at("FSW1")), 23);
+  assert.equal(read(at("FSW2")), 34);
+  assert.equal(memory[at("SPun")], 491);
+  assert.equal(memory[at("SPvn")], 363);
+});
