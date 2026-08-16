@@ -750,3 +750,28 @@ test("TGA loader preserves the source bitfield and scan cursors", () => {
   assert.equal(memory[at("LTP Current Scanline")], 4);
   assert.equal(memory[at("LTP Current Pixel Pointer")], target + 42);
 });
+
+test("rectangle restores its source pixel counter after each scanline", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const view = new DataView(memory.buffer);
+  const bounds = 200_000;
+  const gradients = 300_000;
+  const target = 400_000;
+  linked.labels.set(canonicalName("FX Raw"), 0);
+  memory.set([1, 2, 3, 2], bounds);
+  for (let index = 0; index < 9; index += 1) view.setFloat32((gradients + index) * 4, 0.5, true);
+  memory[at("Rectangle Target Layer")] = target;
+  memory[at("Rectangle Bounds")] = bounds;
+  memory[at("Rectangle Gradients")] = gradients;
+  memory[at("Rectangle Display Alignment")] = 10;
+  memory[at("Rectangle Effect")] = 1;
+  memory[at("Display Width")] = 10;
+
+  intrinsic[SERVICES.rectangle](machine, linked);
+
+  assert.deepEqual([...memory.slice(target + 21, target + 24)], [0x808080, 0x808080, 0x808080]);
+  assert.equal(memory[at("RECT Pixels")], 3);
+  assert.equal(memory[at("RECT Scanlines")], 0);
+});

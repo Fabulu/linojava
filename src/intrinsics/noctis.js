@@ -8892,7 +8892,7 @@ function rectangle(machine, linked) {
     }
   }
   memory[p.rectdisplaypointer] = pointer;
-  memory[p.rectpixels] = 0;
+  memory[p.rectpixels] = pixels;
   memory[p.rectscanlines] = 0;
   machine.X = LINO_DONE;
 }
