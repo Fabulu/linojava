@@ -64,6 +64,7 @@ function fixture() {
     "RECT V Start Red", "RECT V Start Green", "RECT V Start Blue", "RECT V Delta Red",
     "RECT V Delta Green", "RECT V Delta Blue", "RECT Pixels", "RECT Scanlines",
     "RECT Display Pointer", "FX Transparent Color", "FX Filter Color", "Display Width",
+    "Shadow Layer Mask",
     "TGA Target Layer", "TGA Picture Data", "TGA Display Alignment", "TGA Display Width",
     "TGA Display Height", "TGA Picture Left", "TGA Picture Top", "TGA Effect",
     "TR Bounds", "TR Picture Data", "TR Target Layer", "TR Display Alignment", "TR Effect",
@@ -721,6 +722,7 @@ test("TGA loader preserves the source bitfield and scan cursors", () => {
     linked.symbols.get(canonicalName(name)).value = 10_000 + index * 100;
   });
   linked.labels.set(canonicalName("FX Raw"), 0);
+  linked.labels.set(canonicalName("FX Shadow"), 1);
   const data = 300_000;
   const target = 400_000;
   const bytes = new Uint8Array(memory.buffer, data * 4, 21);
@@ -750,6 +752,12 @@ test("TGA loader preserves the source bitfield and scan cursors", () => {
   assert.equal(memory[at("LTP Current Pixel")], 3);
   assert.equal(memory[at("LTP Current Scanline")], 4);
   assert.equal(memory[at("LTP Current Pixel Pointer")], target + 42);
+
+  memory[target + 32] = 0x40302010;
+  memory[at("Shadow Layer Mask")] = 0x01000000;
+  memory[at("TGA Effect")] = 2;
+  intrinsic[SERVICES.loadTgaPicture](machine, linked);
+  assert.equal(memory[target + 32], 0x412f1e0d);
 });
 
 test("TGA region tiling batches raw one-pixel GUI fills", () => {

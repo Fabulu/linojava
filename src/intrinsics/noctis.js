@@ -8599,6 +8599,7 @@ function rectangleAddresses(linked) {
     "RECT V Start Red", "RECT V Start Green", "RECT V Start Blue", "RECT V Delta Red",
     "RECT V Delta Green", "RECT V Delta Blue", "RECT Pixels", "RECT Scanlines",
     "RECT Display Pointer", "FX Transparent Color", "FX Filter Color", "Display Width",
+    "Shadow Layer Mask",
   ];
   cached = Object.fromEntries(names.map((name) => [canonicalName(name), address(linked, name)]));
   rectangleAddressCaches.set(linked, cached);
@@ -8646,6 +8647,7 @@ function pixelEffects(linked) {
   add("doubleAaLight", ["service FX Doublestrike Antialiasing Lit Superimpose"], true);
   add("doubleAaDim", ["service FX Doublestrike Antialiasing Dim"]);
   add("doubleAaDim", ["service FX Doublestrike Antialiasing Dim Superimpose"], true);
+  add("shadow", ["service FX Shadow"]);
   pixelEffectCaches.set(linked, cached);
   return cached;
 }
@@ -8726,6 +8728,16 @@ function applyPixelEffect(memory, linked, p, handle, pointer, color) {
       antialias(pointer, quarter, false);
       const half = (color & 0xfefefe) >>> 1;
       for (const at of [pointer - 1, pointer + 1, pointer - width, pointer + width]) antialias(at, half, false);
+      break;
+    }
+    case "shadow": {
+      const background = memory[pointer] | 0;
+      const layerMask = memory[p.shadowlayermask] | 0;
+      if ((background & layerMask) !== 0) break;
+      const blue = Math.max((background & 0xff) - (color & 0xff), 0);
+      const green = Math.max((background & 0xff00) - (color & 0xff00), 0);
+      const red = Math.max((background & 0xff0000) - (color & 0xff0000), 0);
+      memory[pointer] = (blue | green | red | (background & 0xff000000) | layerMask) | 0;
       break;
     }
     default: throw new RangeError(`Unsupported Rectangle pixel effect ${effect.kind}`);
