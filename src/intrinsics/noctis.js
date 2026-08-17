@@ -5863,6 +5863,39 @@ function landedMushroomPixels(machine, linked, direct = null) {
   memory[maskAddress] = colorMask;
   if (direct) {
     let seed = memory[direct.SUfseed] >>> 0;
+    const baseColor = memory[baseAddress] | 0;
+    const patternKey = `${seed}:${remaining}:${colorMask}:${baseColor}`;
+    const patternCache = machine.noctisMushroomPixelPatterns ??= new Map();
+    const cachedPattern = patternCache.get(patternKey);
+    const screenOffset = Math.imul(memory[yAddress] | 0, 320)
+      + (memory[xAddress] | 0);
+    if (cachedPattern) {
+      const pixels = cachedPattern.pixels;
+      for (let index = 0; index < pixels.length; index += 2) {
+        const offset = screenOffset + pixels[index];
+        const color = pixels[index + 1];
+        memory[page + offset] = color;
+        memory[page + offset + 1] = color;
+        memory[page + offset - 1] = color;
+        memory[page + offset + 320] = color;
+        memory[page + offset - 320] = color;
+        memory[page + offset - 640] = color;
+      }
+      if (pixels.length !== 0) {
+        memory[offsetAddress] = screenOffset + pixels[pixels.length - 2];
+      }
+      memory[direct.SUfeax] = cachedPattern.raw;
+      memory[direct.SUfseed] = cachedPattern.seed;
+      memory[direct.SUfval] = cachedPattern.result;
+      memory[innerAddress] = 0;
+      machine.A = 0;
+      machine.B = cachedPattern.seed;
+      machine.C = cachedPattern.result;
+      machine.D = cachedPattern.high;
+      return;
+    }
+    const pixels = new Int32Array(remaining * 2);
+    let pixel = 0;
     let finalInputSeed = seed;
     let raw = 0;
     let result = 0;
@@ -5871,18 +5904,21 @@ function landedMushroomPixels(machine, linked, direct = null) {
       finalInputSeed = seed;
       raw = landedFastRandomRaw(seed);
       seed = (seed + (raw >>> 0)) >>> 0;
-      const y = (memory[yAddress] | 0) + (raw & 7);
+      const relativeY = raw & 7;
       finalInputSeed = seed;
       raw = landedFastRandomRaw(seed);
       seed = (seed + (raw >>> 0)) >>> 0;
-      const x = (memory[xAddress] | 0) + (raw & 7);
-      const offset = Math.imul(y, 320) + x;
+      const relativeOffset = Math.imul(relativeY, 320) + (raw & 7);
+      const offset = screenOffset + relativeOffset;
       finalOffset = offset;
       finalInputSeed = seed;
       raw = landedFastRandomRaw(seed);
       seed = (seed + (raw >>> 0)) >>> 0;
       result = raw & colorMask;
-      const color = result + (memory[baseAddress] | 0);
+      const color = result + baseColor;
+      pixels[pixel] = relativeOffset;
+      pixels[pixel + 1] = color;
+      pixel += 2;
       memory[page + offset] = color;
       memory[page + offset + 1] = color;
       memory[page + offset - 1] = color;
@@ -5899,7 +5935,12 @@ function landedMushroomPixels(machine, linked, direct = null) {
     machine.A = 0;
     machine.B = seed | 0;
     machine.C = result;
-    machine.D = landedFastRandomHigh(finalInputSeed);
+    const high = landedFastRandomHigh(finalInputSeed);
+    machine.D = high;
+    if (patternCache.size >= 16384) patternCache.clear();
+    patternCache.set(patternKey, {
+      pixels, raw, seed: seed | 0, result, high,
+    });
     return;
   }
   while (remaining !== 0) {
