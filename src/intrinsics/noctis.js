@@ -256,6 +256,12 @@ const SERVICE_IDS = Object.freeze({
   terrainTree: "service:vhgndtree",
   terrainGreenmush: "service:vhgndgreenmush",
   modifyPolyVector: "service:spmodpv",
+  pvGetFloat32: "service:spgetf32",
+  pvPutFloat32: "service:spputf32",
+  pvGetUint16: "service:spgetu16",
+  pvPutUint16: "service:spputu16",
+  polyVectorMidpoints: "service:sppvmidpoints2",
+  polyVectorSortKey: "service:spqskey",
   terrainTraverse: "service:vhgndtraversefaithful",
   waterBackdrop: "service:vhgndwaterbackdrop",
   denseAtmosphere: "service:vhgnddenseatmosphere",
@@ -793,6 +799,119 @@ const PGF_SERVICE_INLINES = Object.freeze({
   [SERVICE_IDS.pgfFromInteger]: (linked) => {
     const p = pgfInlineLayout(linked);
     return `f64w(${p.fa},m[${p.fi}]|0);`;
+  },
+});
+
+function polyVectorMemoryLayout(linked) {
+  return {
+    arena: noctisBuffer(linked, "RPVF"),
+    index: address(linked, "SPidx"),
+    value: address(linked, "SPf"),
+  };
+}
+
+function polyVectorGetFloat32(machine, linked) {
+  const memory = machine.memory;
+  const p = polyVectorMemoryLayout(linked);
+  const source = (p.arena + (memory[p.index] | 0)) >>> 0;
+  const low = memory[source] & 255;
+  const bits = (low | ((memory[source + 1] & 255) << 8)
+    | ((memory[source + 2] & 255) << 16)
+    | ((memory[source + 3] & 255) << 24)) | 0;
+  memory[p.value] = bits;
+  machine.A = source | 0;
+  machine.C = bits;
+  machine.D = low;
+}
+
+function polyVectorPutFloat32(machine, linked) {
+  const memory = machine.memory;
+  const p = polyVectorMemoryLayout(linked);
+  const destination = (p.arena + (memory[p.index] | 0)) >>> 0;
+  const bits = memory[p.value] | 0;
+  memory[destination] = bits & 255;
+  memory[destination + 1] = (bits >>> 8) & 255;
+  memory[destination + 2] = (bits >>> 16) & 255;
+  memory[destination + 3] = (bits >>> 24) & 255;
+  machine.A = destination | 0;
+  machine.C = (bits >>> 24) & 255;
+}
+
+function polyVectorGetUint16(machine, linked) {
+  const memory = machine.memory;
+  const p = polyVectorMemoryLayout(linked);
+  const source = (p.arena + (memory[p.index] | 0)) >>> 0;
+  const low = memory[source] & 255;
+  const bits = low | ((memory[source + 1] & 255) << 8);
+  memory[p.value] = bits;
+  machine.A = source | 0;
+  machine.C = bits;
+  machine.D = low;
+}
+
+function polyVectorPutUint16(machine, linked) {
+  const memory = machine.memory;
+  const p = polyVectorMemoryLayout(linked);
+  const destination = (p.arena + (memory[p.index] | 0)) >>> 0;
+  const bits = memory[p.value] | 0;
+  memory[destination] = bits & 255;
+  memory[destination + 1] = (bits >>> 8) & 255;
+  machine.A = destination | 0;
+  machine.C = (bits >>> 8) & 255;
+}
+
+function polyVectorSortKey(machine, linked) {
+  const memory = machine.memory;
+  const p = polyVectorMemoryLayout(linked);
+  const packedIndex = (memory[address(linked, "QSidx")]
+    + Math.imul(memory[address(linked, "QStmp")], 2)) | 0;
+  memory[p.index] = packedIndex;
+  const packedAddress = (p.arena + packedIndex) >>> 0;
+  const packedLow = memory[packedAddress] & 255;
+  const polygon = packedLow | ((memory[packedAddress + 1] & 255) << 8);
+  memory[p.value] = polygon;
+  const distanceIndex = (memory[address(linked, "QSdst")] + Math.imul(polygon, 4)) | 0;
+  memory[p.index] = distanceIndex;
+  const source = (p.arena + distanceIndex) >>> 0;
+  const low = memory[source] & 255;
+  const bits = (low | ((memory[source + 1] & 255) << 8)
+    | ((memory[source + 2] & 255) << 16)
+    | ((memory[source + 3] & 255) << 24)) | 0;
+  memory[p.value] = bits;
+  memory[address(linked, "PGFt")] = bits;
+  memory[address(linked, "FS0")] = bits;
+  writeFloat64(memory, address(linked, "FA0"), float32FromBits(bits));
+  machine.A = source | 0;
+  machine.C = bits;
+  machine.D = low;
+}
+
+const POLY_VECTOR_MEMORY_INLINES = Object.freeze({
+  [SERVICE_IDS.pvGetFloat32]: (linked) => {
+    const p = polyVectorMemoryLayout(linked);
+    return `q=(${p.arena}+(m[${p.index}]|0))>>>0;D=m[q]&255;C=(D|((m[q+1]&255)<<8)|((m[q+2]&255)<<16)|((m[q+3]&255)<<24))|0;m[${p.value}]=C;A=q|0;`;
+  },
+  [SERVICE_IDS.pvPutFloat32]: (linked) => {
+    const p = polyVectorMemoryLayout(linked);
+    return `q=(${p.arena}+(m[${p.index}]|0))>>>0;u=m[${p.value}]|0;m[q]=u&255;m[q+1]=(u>>>8)&255;m[q+2]=(u>>>16)&255;C=(u>>>24)&255;m[q+3]=C;A=q|0;`;
+  },
+  [SERVICE_IDS.pvGetUint16]: (linked) => {
+    const p = polyVectorMemoryLayout(linked);
+    return `q=(${p.arena}+(m[${p.index}]|0))>>>0;D=m[q]&255;C=(D|((m[q+1]&255)<<8))|0;m[${p.value}]=C;A=q|0;`;
+  },
+  [SERVICE_IDS.pvPutUint16]: (linked) => {
+    const p = polyVectorMemoryLayout(linked);
+    return `q=(${p.arena}+(m[${p.index}]|0))>>>0;u=m[${p.value}]|0;m[q]=u&255;C=(u>>>8)&255;m[q+1]=C;A=q|0;`;
+  },
+  [SERVICE_IDS.polyVectorSortKey]: (linked) => {
+    const p = polyVectorMemoryLayout(linked);
+    const indexBase = address(linked, "QSidx");
+    const index = address(linked, "QStmp");
+    const distanceBase = address(linked, "QSdst");
+    const pgft = address(linked, "PGFt");
+    const fs0 = address(linked, "FS0");
+    const fa = address(linked, "FA0");
+    return `q=((m[${indexBase}]|0)+2*(m[${index}]|0))|0;m[${p.index}]=q;u=(${p.arena}+q)>>>0;D=m[u]&255;C=(D|((m[u+1]&255)<<8))|0;m[${p.value}]=C;A=u|0;q=((m[${distanceBase}]|0)+4*C)|0;m[${p.index}]=q;u=(${p.arena}+q)>>>0;D=m[u]&255;C=(D|((m[u+1]&255)<<8)|((m[u+2]&255)<<16)|((m[u+3]&255)<<24))|0;m[${p.value}]=C;A=u|0;m[${pgft}]=C;m[${fs0}]=C;f64w(${fa},fread(C));`;
   },
 });
 
@@ -3046,7 +3165,9 @@ function prepareTerrainVectorsFast(machine, p, vertices) {
   const nearest = (control & 0x0c00) === 0;
 
   if (vertices === 3 && nearest && (floats & 1) === 0) {
-    prepareTerrainVectorsAligned(memory, p, float64View(memory), floats >>> 1, factor);
+    const qwords = float64View(memory);
+    const base = floats >>> 1;
+    prepareTerrainVectorsAligned(memory, p, qwords, base, factor);
     return;
   }
 
@@ -4535,7 +4656,7 @@ function mappedTerrainScanline(machine, p) {
   }
 }
 
-function mappedTerrainTraceAligned(machine, p) {
+function mappedTerrainTraceAligned(machine, p, additive = false, publishUvFa = false) {
   const memory = machine.memory;
   const control = floatingPoint(machine).control;
   const qwords = machine.noctisFloat64Memory ??= float64View(memory);
@@ -4668,6 +4789,7 @@ function mappedTerrainTraceAligned(machine, p) {
       result *= reciprocal;
       qwords[base + p.FSW3] = result;
       spvn = convertToInt32(result, control);
+      if (publishUvFa) finalFa = result;
 
       spbp = ((spun - spu) >> 4) & 0xffff;
       spsi = ((spvn - spv) >> 4) & 0xffff;
@@ -4714,7 +4836,15 @@ function mappedTerrainTraceAligned(machine, p) {
         spdi = (start + 32) & 0xffff;
       } else {
         let pixelIndex = 0;
-        for (; pixelIndex + 3 < count; pixelIndex += 4) {
+        if (additive) for (; pixelIndex < count; pixelIndex += 1) {
+          di += 1;
+          const destination = page + di + 3;
+          const index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          memory[destination] = ((memory[destination] & 0xff)
+            + (memory[texture + index] & 0xff)) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+        }
+        else for (; pixelIndex + 3 < count; pixelIndex += 4) {
           di += 1;
           let index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
           memory[page + di + 3] = ((memory[texture + index] & 0xff) + tint) & 0xff;
@@ -4839,6 +4969,17 @@ function mappedTrace(machine, linked, p) {
       && ((memory[p.PGfwbase] | 0) & 1) === 0
       && (p.FA0 & 1) === 0) {
     mappedTerrainTraceAligned(machine, p);
+    return;
+  }
+  if ((memory[p.SPpixfast] | 0) !== 0
+      && (memory[p.PGtexf] | 0) === 5
+      && (memory[p.SPflar] & 14) === 0
+      && (memory[p.SPcull] & 1) === 0
+      && (memory[p.SPhalf] & 1) === 0
+      && (floatingPoint(machine).control & 0x0c00) === 0
+      && ((memory[p.PGfwbase] | 0) & 1) === 0
+      && (p.FA0 & 1) === 0) {
+    mappedTerrainTraceAligned(machine, p, (memory[p.SPflar] & 1) !== 0, true);
     return;
   }
   mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, memory[p.SPtinta]);
@@ -6812,6 +6953,10 @@ function polyVectorMidpointsDirect(machine, linked, p) {
   machine.A = count;
 }
 
+function polyVectorMidpoints(machine, linked) {
+  polyVectorMidpointsDirect(machine, linked, polyVectorAddresses(linked));
+}
+
 function modifyPolyVector(machine, linked) {
   const memory = machine.memory;
   const p = polyVectorAddresses(linked);
@@ -7151,11 +7296,13 @@ function projectTreeModelVertices(machine, tree, model) {
   if (!changed && model.projection) return model.projection;
 
   const count = model.vertices.length / 3;
-  const projection = {
-    rx: new Float64Array(count), ry: new Float64Array(count),
-    rz: new Float64Array(count), px: new Int32Array(count),
-    py: new Int32Array(count), visible: new Uint8Array(count),
-  };
+  const projection = model.projection?.rx.length === count
+    ? model.projection
+    : {
+      rx: new Float64Array(count), ry: new Float64Array(count),
+      rz: new Float64Array(count), px: new Int32Array(count),
+      py: new Int32Array(count), visible: new Uint8Array(count),
+    };
   const cameraX = signature[0];
   const cameraY = signature[1];
   const cameraZ = signature[2];
@@ -7356,6 +7503,40 @@ function greenmushProjectionContext(machine, tree) {
     dpp: directPolySlotView(view, p, p.FSDPP),
     centerX: directPolySlotView(view, p, p.FSXC),
     centerY: directPolySlotView(view, p, p.FSYC),
+    lowerX: p.PGLBX,
+    upperX: p.PGUBX,
+    lowerY: p.PGLBY,
+    upperY: p.PGUBY,
+  };
+}
+
+function projectGreenmushPointLocal(machine, context, inputX, inputY, inputZ) {
+  const control = context.control;
+  const z = roundFloat32(inputZ - context.cameraZ, control);
+  const relativeX = roundFloat32(inputX - context.cameraX, control);
+  const relativeY = roundFloat32(inputY - context.cameraY, control);
+  const rotatedX = roundFloat32(
+    relativeX * context.betaCos + z * context.betaSin, control,
+  );
+  const z2 = roundFloat32(
+    z * context.betaCos - relativeX * context.betaSin, control,
+  );
+  const rotatedZWide = relativeY * context.alphaSin + z2 * context.alphaCos;
+  const rotatedZ = roundFloat32(rotatedZWide, control);
+  const visible = !Number.isNaN(rotatedZWide) && !Number.isNaN(context.near)
+    && rotatedZWide >= context.near;
+  const rotatedY = roundFloat32(
+    relativeY * context.alphaCos - z2 * context.alphaSin, control,
+  );
+  if (!visible) return null;
+  const factor = context.dpp / rotatedZ;
+  const screenX = convertToInt32(factor * rotatedX + context.centerX, control);
+  const screenY = convertToInt32(factor * rotatedY + context.centerY, control);
+  return {
+    screenX,
+    screenY,
+    drawable: screenX > context.lowerX && screenX < context.upperX
+      && screenY > context.lowerY && screenY < context.upperY,
   };
 }
 
@@ -7537,7 +7718,22 @@ function renderGreenmushDirect(machine, linked, tree) {
       writeFloat64(memory, tree.p.fw + tree.p.FSINZ * 2, Math.fround(z));
       memory[tree.VHGNDvi] = 3;
     }
-    if (projectGreenmushPoint(machine, tree, projection, pointX, pointY, pointZ)) {
+    let drawable;
+    if (outer === 1) {
+      drawable = projectGreenmushPoint(
+        machine, tree, projection, pointX, pointY, pointZ,
+      );
+    } else {
+      const projected = projectGreenmushPointLocal(
+        machine, projection, pointX, pointY, pointZ,
+      );
+      if (projected) {
+        memory[tree.GCx] = projected.screenX;
+        memory[tree.GCy] = projected.screenY;
+        drawable = projected.drawable;
+      } else drawable = false;
+    }
+    if (drawable) {
       const innerMask = memory[state[4]] | 0;
       memory[tree.SUfmask] = innerMask;
       const inner = landedFastRandom(machine, linked, innerMask, tree) + 1;
@@ -8011,6 +8207,95 @@ function renderTerrainTileDetails(machine, linked, p, handles, x, z) {
   }
 }
 
+function terrainTraversalPlan(machine, p, camtx, camtz, backspan, beta) {
+  const memory = machine.memory;
+  const xlo65 = Math.max(camtx - 65, 0);
+  const xhi65 = Math.min(camtx + 65, 198);
+  const zlo65 = Math.max(camtz - 65, 0);
+  const zhi65 = Math.min(camtz + 65, 198);
+  let branch;
+  let xlo;
+  let xhi;
+  let zlo;
+  let zhi;
+  let finalAddress;
+  let finalValue;
+  if (beta < 45 || beta >= 315) {
+    branch = 0;
+    xlo = xlo65; xhi = xhi65;
+    zlo = Math.max(camtz - backspan, 0);
+    zhi = Math.min(camtz + 65, 198);
+    finalAddress = p.VHGNDz; finalValue = zlo - 1;
+  } else if (beta < 135) {
+    branch = 1;
+    xlo = Math.max(camtx - 65, 0);
+    xhi = Math.min(camtx + backspan, 198);
+    zlo = zlo65; zhi = zhi65;
+    finalAddress = p.VHGNDx; finalValue = xhi + 1;
+  } else if (beta < 225) {
+    branch = 2;
+    xlo = xlo65; xhi = xhi65;
+    zlo = Math.max(camtz - 65, 0);
+    zhi = Math.min(camtz + backspan, 198);
+    finalAddress = p.VHGNDz; finalValue = zhi + 1;
+  } else {
+    branch = 3;
+    xlo = Math.max(camtx - backspan, 0);
+    xhi = Math.min(camtx + 65, 198);
+    zlo = zlo65; zhi = zhi65;
+    finalAddress = p.VHGNDx; finalValue = xlo - 1;
+  }
+
+  const cameraX = memory[p.VHGNDcamx] | 0;
+  const cameraZ = memory[p.VHGNDcamz] | 0;
+  const rounding = memory[p.GRcwc] & 0xffff;
+  const key = `${cameraX}:${cameraZ}:${camtx}:${camtz}:${backspan}:${branch}`
+    + `:${xlo}:${xhi}:${zlo}:${zhi}:${rounding}`;
+  const cached = machine.noctisTerrainTraversalPlan;
+  if (cached?.key === key) return cached;
+
+  const values = [];
+  const add = (x, z) => {
+    const manhattan = Math.abs(camtx - x) + Math.abs(camtz - z);
+    if (manhattan > 90) {
+      values.push(x, z, manhattan, -1, 0, 0, 0, 0);
+      return;
+    }
+    const h1 = Math.imul(z, 200) + x;
+    const dx = (cameraX - ((x << 14) + 8192)) | 0;
+    const dz = (cameraZ - ((z << 14) + 8192)) | 0;
+    const rounded = convertToInt32(Math.sqrt(dx * dx + dz * dz), rounding);
+    values.push(x, z, manhattan, h1, dx, dz, rounded, rounded >> 14);
+  };
+  if (branch === 0) {
+    for (let z = zhi; z >= zlo; z -= 1) {
+      for (let x = xlo; x < camtx; x += 1) add(x, z);
+      for (let x = xhi; x >= camtx; x -= 1) add(x, z);
+    }
+  } else if (branch === 1) {
+    for (let x = xlo; x <= xhi; x += 1) {
+      for (let z = zhi; z > camtz; z -= 1) add(x, z);
+      for (let z = zlo; z <= camtz; z += 1) add(x, z);
+    }
+  } else if (branch === 2) {
+    for (let z = zlo; z <= zhi; z += 1) {
+      for (let x = xlo; x < camtx; x += 1) add(x, z);
+      for (let x = xhi; x >= camtx; x -= 1) add(x, z);
+    }
+  } else {
+    for (let x = xhi; x >= xlo; x -= 1) {
+      for (let z = zhi; z > camtz; z -= 1) add(x, z);
+      for (let z = zlo; z <= camtz; z += 1) add(x, z);
+    }
+  }
+  const plan = {
+    key, records: Int32Array.from(values), xlo, xhi, zlo, zhi,
+    finalAddress, finalValue,
+  };
+  machine.noctisTerrainTraversalPlan = plan;
+  return plan;
+}
+
 function terrainTraverseFaithful(machine, linked) {
   const memory = machine.memory;
   const p = landedTerrainAddresses(linked);
@@ -8046,10 +8331,6 @@ function terrainTraverseFaithful(machine, linked) {
   const camtx = memory[p.VHGNDcamtx] | 0;
   const camtz = memory[p.VHGNDcamtz] | 0;
   const backspan = (memory[p.VHGlanded] | 0) !== 0 ? 1 : 4;
-  const xlo65 = Math.max(camtx - 65, 0);
-  const xhi65 = Math.min(camtx + 65, 198);
-  const zlo65 = Math.max(camtz - 65, 0);
-  const zhi65 = Math.min(camtz + 65, 198);
   memory[p.VHGNDlodstep] = 1;
   memory[p.VHGNDlodradius] = 65;
   memory[p.VHGNDbackspan] = backspan;
@@ -8060,61 +8341,42 @@ function terrainTraverseFaithful(machine, linked) {
   beta %= 360;
   memory[p.VHGNDtmp] = beta;
 
-  const tile = (x, z) => {
+  const plan = terrainTraversalPlan(machine, p, camtx, camtz, backspan, beta);
+  memory[p.VHGNDxlo] = plan.xlo; memory[p.VHGNDxhi] = plan.xhi;
+  memory[p.VHGNDzlo] = plan.zlo; memory[p.VHGNDzhi] = plan.zhi;
+  const fpu = floatingPoint(machine);
+  const records = plan.records;
+  for (let record = 0; record < records.length; record += 8) {
+    const x = records[record];
+    const z = records[record + 1];
     memory[p.VHGNDx] = x;
     memory[p.VHGNDz] = z;
     memory[p.VHGNDnativecomplete] = 0;
-    landedTileAdmissionAt(machine, linked, p, x, z, camtx, camtz);
+    const manhattan = records[record + 2];
+    memory[p.VHGNDmanhattan] = manhattan;
+    const h1 = records[record + 3];
+    if (h1 < 0) memory[p.VHGNDnativecomplete] = 2;
+    else {
+      memory[p.VHGNDh1] = h1;
+      memory[p.VHGNDdx] = records[record + 4];
+      memory[p.VHGNDdz] = records[record + 5];
+      fpu.control = memory[p.GRcwc] & 0xffff;
+      memory[p.FI] = records[record + 6];
+      fpu.control = memory[p.GRcwn] & 0xffff;
+      const raw = records[record + 7];
+      memory[p.VHGNDrawdepth] = raw;
+      memory[p.VHGNDdepth] = Math.max(raw - 1, 0);
+      if (!machine.noctisDisableTerrainTileCore) {
+        landedTerrainTileCore(machine, linked, manhattan, raw);
+      }
+    }
     const completed = memory[p.VHGNDnativecomplete] | 0;
     if (completed === 0) machine.callCode(fullTile);
-    else if (completed === 1) renderTerrainTileDetails(machine, linked, p, detailHandles, x, z);
-  };
-
-  if (beta < 45 || beta >= 315) {
-    const zlo = Math.max(camtz - backspan, 0);
-    const zhi = Math.min(camtz + 65, 198);
-    memory[p.VHGNDxlo] = xlo65; memory[p.VHGNDxhi] = xhi65;
-    memory[p.VHGNDzlo] = zlo; memory[p.VHGNDzhi] = zhi;
-    for (let z = zhi; z >= zlo; z -= 1) {
-      for (let x = xlo65; x < camtx; x += 1) tile(x, z);
-      for (let x = xhi65; x >= camtx; x -= 1) tile(x, z);
-    }
-    memory[p.VHGNDz] = zlo - 1;
-    return;
+    else if (completed === 1) renderTerrainTileDetails(
+      machine, linked, p, detailHandles, x, z,
+    );
   }
-  if (beta < 135) {
-    const xlo = Math.max(camtx - 65, 0);
-    const xhi = Math.min(camtx + backspan, 198);
-    memory[p.VHGNDxlo] = xlo; memory[p.VHGNDxhi] = xhi;
-    memory[p.VHGNDzlo] = zlo65; memory[p.VHGNDzhi] = zhi65;
-    for (let x = xlo; x <= xhi; x += 1) {
-      for (let z = zhi65; z > camtz; z -= 1) tile(x, z);
-      for (let z = zlo65; z <= camtz; z += 1) tile(x, z);
-    }
-    memory[p.VHGNDx] = xhi + 1;
-    return;
-  }
-  if (beta < 225) {
-    const zlo = Math.max(camtz - 65, 0);
-    const zhi = Math.min(camtz + backspan, 198);
-    memory[p.VHGNDxlo] = xlo65; memory[p.VHGNDxhi] = xhi65;
-    memory[p.VHGNDzlo] = zlo; memory[p.VHGNDzhi] = zhi;
-    for (let z = zlo; z <= zhi; z += 1) {
-      for (let x = xlo65; x < camtx; x += 1) tile(x, z);
-      for (let x = xhi65; x >= camtx; x -= 1) tile(x, z);
-    }
-    memory[p.VHGNDz] = zhi + 1;
-    return;
-  }
-  const xlo = Math.max(camtx - backspan, 0);
-  const xhi = Math.min(camtx + 65, 198);
-  memory[p.VHGNDxlo] = xlo; memory[p.VHGNDxhi] = xhi;
-  memory[p.VHGNDzlo] = zlo65; memory[p.VHGNDzhi] = zhi65;
-  for (let x = xhi; x >= xlo; x -= 1) {
-    for (let z = zhi65; z > camtz; z -= 1) tile(x, z);
-    for (let z = zlo65; z <= camtz; z += 1) tile(x, z);
-  }
-  memory[p.VHGNDx] = xlo - 1;
+  memory[plan.finalAddress] = plan.finalValue;
 }
 
 function terrainRenderRandom(machine, linked) {
@@ -13110,6 +13372,12 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.terrainTree]: terrainTree,
     [SERVICE_IDS.terrainGreenmush]: terrainGreenmush,
     [SERVICE_IDS.modifyPolyVector]: modifyPolyVector,
+    [SERVICE_IDS.pvGetFloat32]: polyVectorGetFloat32,
+    [SERVICE_IDS.pvPutFloat32]: polyVectorPutFloat32,
+    [SERVICE_IDS.pvGetUint16]: polyVectorGetUint16,
+    [SERVICE_IDS.pvPutUint16]: polyVectorPutUint16,
+    [SERVICE_IDS.polyVectorMidpoints]: polyVectorMidpoints,
+    [SERVICE_IDS.polyVectorSortKey]: polyVectorSortKey,
     [SERVICE_IDS.terrainTraverse]: terrainTraverseFaithful,
     [SERVICE_IDS.waterBackdrop]: waterBackdrop,
     [SERVICE_IDS.denseAtmosphere]: denseAtmosphere,
@@ -13389,6 +13657,9 @@ export function createNoctisIntrinsics(overrides = {}) {
     ...overrides,
   };
   for (const [id, inline] of Object.entries(PGF_SERVICE_INLINES)) {
+    if (!Object.hasOwn(overrides, id)) implementations[id].inline = inline;
+  }
+  for (const [id, inline] of Object.entries(POLY_VECTOR_MEMORY_INLINES)) {
     if (!Object.hasOwn(overrides, id)) implementations[id].inline = inline;
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.scanNotEqual)) {
