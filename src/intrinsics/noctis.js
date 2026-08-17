@@ -268,6 +268,7 @@ const SERVICE_IDS = Object.freeze({
   terrainRenderRandom: "service:vhgndrenderrandom",
   terrainVertexLoad: "service:vhgndvload",
   terrainEyeHeight: "service:vhgndeyeheight",
+  terrainTile: "service:vhgndtile",
   rectangle: "service:rectangle",
   surroundingBorder: "service:vhgndsurroundingborder",
   surroundingCompass: "service:vhgndcompass",
@@ -6382,6 +6383,7 @@ function landedTerrainAddresses(linked) {
   if (cached) return cached;
   const names = [
     "VHGNDnativecomplete", "VHGNDmirror", "VHGNDruinpass", "VHGNDruinanchor",
+    "VHGNDreflected", "VHGNDtscale",
     "VHGNDdepth", "VHGNDshade", "VHGNDh1", "VHGNDs1", "VHGNDs2", "VHGNDs3", "VHGNDs4",
     "GRiptype", "VHGNDsctype", "VHGNDruined", "VHGNDruindrawn", "VHGNDruins", "SPtinta", "DBcol", "SPescr", "DBflar", "DBent",
     "SPcull", "VHGNDtilepolys", "PJfwbase", "fw", "VHGNDvctri", "FCret", "PGtexf", "RPSM",
@@ -6398,7 +6400,7 @@ function landedTerrainAddresses(linked) {
     "VHGNDmii", "VHGNDbii", "VHGNDfaunamid", "VHGNDfaunabid", "SPskipmid",
     "VHGNDalpha", "VHGNDwaterhorizon", "VHGNDwaterden", "VHGNDwatery",
     "GRSKnightzone", "VHGNDwaterbase", "VHGNDwaterptr", "VHGNDwatercount",
-    "VHGNDmanhattan", "VHGNDrawdepth", "VHGNDvv",
+    "VHGNDmanhattan", "VHGNDrawdepth", "VHGNDdx", "VHGNDdz", "VHGNDvv",
     "VHGdrawhud", "VHGhudcount", "VHGNDsurlight", "VHGseamless",
     "VHGNDframei", "VHGNDframey", "VHGNDframecol", "VHGNDframeoff", "VHGNDframecount",
     "VHGmode", "VHGbeta", "VHGNDhudy", "VHGNDcompassrem", "VHGNDcompasspos",
@@ -8309,6 +8311,130 @@ function renderTerrainTileDetails(machine, linked, p, handles, x, z) {
     if (machine.noctisDisableTerrainTileObjects) machine.callCode(handles.objects);
     else renderTerrainTileObjects(machine, linked, p, handles, x, z);
   }
+}
+
+function terrainTileMirror(machine, linked) {
+  const memory = machine.memory;
+  const p = landedTerrainAddresses(linked);
+  if ((memory[p.VHGNDmirror] | 0) === 0 || (memory[p.VHGNDruinpass] | 0) !== 0) {
+    const source = codeHandle(linked, "VHGND tile");
+    if (typeof machine.callCode !== "function" || source < 1) {
+      throw new Error("Source terrain tile path requires nested Lino dispatch");
+    }
+    machine.callCode(source);
+    machine.X = LINO_DONE;
+    return;
+  }
+
+  const x = memory[p.VHGNDx] | 0;
+  const z = memory[p.VHGNDz] | 0;
+  const step = memory[p.VHGNDlodstep] | 0;
+  const manhattan = Math.abs((memory[p.VHGNDcamtx] | 0) - x)
+    + Math.abs((memory[p.VHGNDcamtz] | 0) - z);
+  memory[p.VHGNDmanhattan] = manhattan;
+  if (manhattan > 90) {
+    machine.X = LINO_DONE;
+    return;
+  }
+
+  const h1 = Math.imul(z, 200) + x;
+  memory[p.VHGNDh1] = h1;
+  const centerX = ((x << 14) + (step << 13)) | 0;
+  const centerZ = ((z << 14) + (step << 13)) | 0;
+  const dx = ((memory[p.VHGNDcamx] | 0) - centerX) | 0;
+  const dz = ((memory[p.VHGNDcamz] | 0) - centerZ) | 0;
+  memory[p.VHGNDdx] = dx;
+  memory[p.VHGNDdz] = dz;
+  const roundedDistance = landedDistance(machine, linked, dx, dz);
+  const rawDepth = roundedDistance >> 14;
+  const depth = Math.max(rawDepth - 1, 0);
+  memory[p.VHGNDrawdepth] = rawDepth;
+  memory[p.VHGNDdepth] = depth;
+  if (rawDepth > 64 || depth > (memory[p.VHGNDmaxdepth] | 0)) {
+    machine.X = LINO_DONE;
+    return;
+  }
+  const minimumDepth = memory[p.VHGNDmindepth] | 0;
+  if (minimumDepth >= 0 && (depth >>> 0) <= (minimumDepth >>> 0)) {
+    machine.X = LINO_DONE;
+    return;
+  }
+
+  terrainTileShadeDirect(machine, p);
+  let shade = (machine.C + 8 + (depth >> 1)) | 0;
+  if ((shade >>> 0) > 32) shade = 32;
+  memory[p.VHGNDshade] = shade;
+
+  const rowStep = Math.imul(step, 200);
+  let height0 = memory[p.surface + h1] & 0xff;
+  let height1 = memory[p.surface + h1 + step] & 0xff;
+  let height2 = memory[p.surface + h1 + rowStep + step] & 0xff;
+  let height3 = memory[p.surface + h1 + rowStep] & 0xff;
+  if ((memory[p.GRiptype] | 0) === 3 && (memory[p.VHGNDsctype] | 0) === 1
+      && height0 + height1 + height2 + height3 === 0) {
+    machine.X = LINO_DONE;
+    return;
+  }
+
+  let ruined = 0;
+  if ((memory[p.VHGNDruinanchor] | 0) !== 0
+      && ((memory[p.VHGNDruins + h1] | 0) !== 0
+        || (memory[p.VHGNDruins + h1 + step] | 0) !== 0
+        || (memory[p.VHGNDruins + h1 + rowStep + step] | 0) !== 0
+        || (memory[p.VHGNDruins + h1 + rowStep] | 0) !== 0)) ruined = 1;
+  memory[p.VHGNDruined] = ruined;
+
+  height0 = -height0;
+  height1 = -height1;
+  height2 = -height2;
+  height3 = -height3;
+  memory[p.VHGNDs1] = height0;
+  memory[p.VHGNDs2] = height1;
+  memory[p.VHGNDs3] = height2;
+  memory[p.VHGNDs4] = height3;
+  memory[p.VHGNDreflected] = ((memory[p.VHGNDreflected] | 0) + 1) | 0;
+
+  const tint = ruined !== 0 ? ((shade & 63) + 64) : shade;
+  memory[p.SPtinta] = tint;
+  memory[p.DBcol] = tint;
+  const polygon = polymapAddresses(linked);
+  if (ruined !== 0) {
+    directPolyStoreWide(memory, polygon, polygon.FSTX, 512);
+    directPolyStoreWide(memory, polygon, polygon.FSTY, 512);
+  }
+  memory[p.SPescr] = 0;
+  memory[p.DBflar] = 0;
+  memory[p.DBent] = 0;
+  memory[p.SPcull] = 0;
+  memory[p.VHGNDtilepolys] = 0;
+  memory[p.PJfwbase] = p.fw;
+
+  for (let triangle = 0; triangle < 2; triangle += 1) {
+    memory[p.VHGNDvctri] = triangle;
+    landedTerrainTriangle(machine, linked);
+    terrainFacing(machine, linked);
+    if ((memory[p.FCret] | 0) !== 0) continue;
+    const heightSum = triangle === 0
+      ? height0 + height1 + height3 : height1 + height2 + height3;
+    if (heightSum === 0) continue;
+    memory[p.VHGNDtilepolys] = ((memory[p.VHGNDtilepolys] | 0) + 1) | 0;
+    if (step === 1) {
+      memory[p.PGtexf] = 5;
+      terrainMapped(machine, linked);
+    } else {
+      memory[p.PGtexf] = 0;
+      memory[polygon.PJnrv] = 3;
+      poly3d(machine, linked);
+    }
+  }
+
+  memory[p.VHGNDvctri] = 1;
+  if (ruined !== 0) {
+    const textureScale = Math.imul(memory[p.VHGNDtscale] | 0, 256);
+    directPolyStoreWide(memory, polygon, polygon.FSTX, textureScale);
+    directPolyStoreWide(memory, polygon, polygon.FSTY, textureScale);
+  }
+  machine.X = LINO_DONE;
 }
 
 function terrainTraversalPlan(machine, p, camtx, camtz, backspan, beta) {
@@ -13632,6 +13758,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.terrainRenderRandom]: terrainRenderRandom,
     [SERVICE_IDS.terrainVertexLoad]: landedVertexLoad,
     [SERVICE_IDS.terrainEyeHeight]: landedEyeHeight,
+    [SERVICE_IDS.terrainTile]: terrainTileMirror,
     [SERVICE_IDS.rectangle]: rectangle,
     [SERVICE_IDS.surroundingBorder]: surroundingBorder,
     [SERVICE_IDS.surroundingCompass]: surroundingCompass,
