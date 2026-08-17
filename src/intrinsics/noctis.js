@@ -11269,6 +11269,93 @@ function rectangle(machine, linked) {
   const channelByte = (channel) => Math.max(0, Math.min(255,
     nearestEven(Math.fround(channel * 255)),
   ));
+  const constantRectangle = constantRows
+    && verticalValues.every((channel) => channel === 0);
+  let cachedConstantLight = false;
+  let pendingLightCache = null;
+  if (constantRectangle && effectDescriptor.kind === "light") {
+    const color = (channelByte(start[0]) << 16)
+      | (channelByte(start[1]) << 8) | channelByte(start[2]);
+    if (!effectDescriptor.transparent
+        || color !== (memory[p.fxtransparentcolor] | 0)) {
+      const key = `${target}:${left}:${top}:${pixels}:${scanlines}:${alignment}:${effect}:${color}`;
+      const caches = machine.noctisRectangleLightCaches ??= new Map();
+      const cached = caches.get(key);
+      let inputMatches = Boolean(cached);
+      let inputIndex = 0;
+      for (let y = 0; inputMatches && y < scanlines; y += 1) {
+        const row = target + (top + y) * alignment + left;
+        for (let x = 0; x < pixels; x += 1, inputIndex += 1) {
+          if (memory[row + x] !== cached.input[inputIndex]) inputMatches = false;
+        }
+      }
+      if (inputMatches) {
+        for (let y = 0; y < scanlines; y += 1) {
+          const source = y * pixels;
+          const row = target + (top + y) * alignment + left;
+          memory.set(cached.output.subarray(source, source + pixels), row);
+        }
+        cachedConstantLight = true;
+      } else {
+        const input = new Int32Array(pixels * scanlines);
+        for (let y = 0; y < scanlines; y += 1) {
+          const source = target + (top + y) * alignment + left;
+          input.set(memory.subarray(source, source + pixels), y * pixels);
+        }
+        pendingLightCache = { caches, key, input };
+      }
+    }
+  }
+  let bulkDoubleAaDim = false;
+  if (constantRectangle && effectDescriptor.kind === "doubleAaDim") {
+    const color = (channelByte(start[0]) << 16)
+      | (channelByte(start[1]) << 8) | channelByte(start[2]);
+    if (!effectDescriptor.transparent
+        || color !== (memory[p.fxtransparentcolor] | 0)) {
+      const quarter = (color & 0xfcfcfc) >>> 2;
+      const half = (color & 0xfefefe) >>> 1;
+      const quarterNeighbour = (quarter & 0xf0f0f0) >>> 4;
+      const halfNeighbour = (half & 0xf0f0f0) >>> 4;
+      const center = quarter + Math.imul(halfNeighbour, 4);
+      const cardinal = quarterNeighbour + half;
+      const diagonal = halfNeighbour + halfNeighbour;
+      const kernel = [
+        [0, 0, center], [-1, 0, cardinal], [1, 0, cardinal],
+        [0, -1, cardinal], [0, 1, cardinal],
+        [-1, -1, diagonal], [1, -1, diagonal],
+        [-1, 1, diagonal], [1, 1, diagonal],
+        [-2, 0, halfNeighbour], [2, 0, halfNeighbour],
+        [0, -2, halfNeighbour], [0, 2, halfNeighbour],
+      ];
+      const right = left + pixels - 1;
+      const bottom = top + scanlines - 1;
+      for (let destinationY = top - 2; destinationY <= bottom + 2; destinationY += 1) {
+        for (let destinationX = left - 2; destinationX <= right + 2; destinationX += 1) {
+          let blueAmount = 0;
+          let greenAmount = 0;
+          let redAmount = 0;
+          for (const [offsetX, offsetY, amount] of kernel) {
+            const sourceX = destinationX - offsetX;
+            const sourceY = destinationY - offsetY;
+            if (sourceX < left || sourceX > right || sourceY < top || sourceY > bottom) continue;
+            blueAmount += amount & 0xff;
+            greenAmount += (amount >>> 8) & 0xff;
+            redAmount += (amount >>> 16) & 0xff;
+          }
+          const destination = target + destinationY * alignment + destinationX;
+          const current = memory[destination] | 0;
+          let outputBlue = (current & 0xff) - Math.min(blueAmount, 0xff);
+          let outputGreen = (current & 0xff00) - (Math.min(greenAmount, 0xff) << 8);
+          let outputRed = (current & 0xff0000) - (Math.min(redAmount, 0xff) << 16);
+          if (outputBlue < 0) outputBlue = 0;
+          if (outputGreen < 0) outputGreen = 0;
+          if (outputRed < 0) outputRed = 0;
+          memory[destination] = (outputBlue | outputGreen | outputRed) | 0;
+        }
+      }
+    }
+    bulkDoubleAaDim = true;
+  }
   for (let y = 0; y < scanlines; y += 1) {
     let red = verticalStart[0];
     let green = verticalStart[1];
@@ -11277,7 +11364,8 @@ function rectangle(machine, linked) {
     memory[p.recthstartred] = bits(red);
     memory[p.recthstartgreen] = bits(green);
     memory[p.recthstartblue] = bits(blue);
-    if (raw && constantRows) {
+    if (cachedConstantLight || bulkDoubleAaDim) pointer += pixels;
+    else if (raw && constantRows) {
       const color = (channelByte(red) << 16) | (channelByte(green) << 8) | channelByte(blue);
       memory.fill(color, pointer, pointer + pixels);
       pointer += pixels;
@@ -11336,6 +11424,16 @@ function rectangle(machine, linked) {
     }
   }
   memory[p.rectdisplaypointer] = pointer;
+  if (pendingLightCache) {
+    const output = new Int32Array(pixels * scanlines);
+    for (let y = 0; y < scanlines; y += 1) {
+      const source = target + (top + y) * alignment + left;
+      output.set(memory.subarray(source, source + pixels), y * pixels);
+    }
+    pendingLightCache.caches.set(pendingLightCache.key, {
+      input: pendingLightCache.input, output,
+    });
+  }
   memory[p.rectpixels] = pixels;
   memory[p.rectscanlines] = 0;
   machine.X = LINO_DONE;
