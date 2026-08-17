@@ -1134,15 +1134,26 @@ function alphaDimInline(destination, source) {
   }`;
 }
 
+function alphaDimPreparedInline(destination, sourceBlue, sourceGreen, sourceRed) {
+  return `{
+    const alphaDestination=(${destination})>>>0,current=m[alphaDestination]|0;
+    let blue=(current&255)-(${sourceBlue}),green=(current&65280)-(${sourceGreen}),red=(current&16711680)-(${sourceRed});
+    if(blue<0)blue=0;if(green<0)green=0;if(red<0)red=0;
+    C=(blue|green|red)|0;m[alphaDestination]=C;A=alphaDestination|0;B=(${sourceRed})|0;D=green|0;E=red|0;
+  }`;
+}
+
 function antialiasingDimInline(linked) {
   const width = address(linked, "Display Width");
   return `{
     const origin=A|0,source=B|0,width=m[${width}]|0,neighbour=((source&15790320)>>>4)|0;
-    ${alphaDimInline("origin", "source")}
-    ${alphaDimInline("origin-1", "neighbour")}
-    ${alphaDimInline("origin+1", "neighbour")}
-    ${alphaDimInline("origin-width", "neighbour")}
-    ${alphaDimInline("origin+width", "neighbour")}
+    const sourceBlue=source&255,sourceGreen=source&65280,sourceRed=source&16711680;
+    const neighbourBlue=neighbour&255,neighbourGreen=neighbour&65280,neighbourRed=neighbour&16711680;
+    ${alphaDimPreparedInline("origin", "sourceBlue", "sourceGreen", "sourceRed")}
+    ${alphaDimPreparedInline("origin-1", "neighbourBlue", "neighbourGreen", "neighbourRed")}
+    ${alphaDimPreparedInline("origin+1", "neighbourBlue", "neighbourGreen", "neighbourRed")}
+    ${alphaDimPreparedInline("origin-width", "neighbourBlue", "neighbourGreen", "neighbourRed")}
+    ${alphaDimPreparedInline("origin+width", "neighbourBlue", "neighbourGreen", "neighbourRed")}
     A=origin;
   }`;
 }
@@ -11761,63 +11772,72 @@ function standardText(machine, linked) {
   machine.X = LINO_DONE;
 }
 
-function terrainFacingDirect(machine, ground, triangle) {
+function terrainFacingPairDirect(machine, ground) {
   const memory = machine.memory;
   const h1 = memory[ground.VHGNDh1] | 0;
-  const index = Math.imul(h1, 2) + triangle;
-  memory[ground.VHGNDnormindex] = index;
+  const firstIndex = Math.imul(h1, 2);
   const generation = memory[ground.VHGNDnormgen] | 0;
-  let normalX;
-  let normalY;
-  let normalZ;
-  if ((memory[ground.VHGNDnormstamp + index] | 0) === generation) {
-    normalX = float32FromBits(memory[ground.VHGNDnormx + index]);
-    normalY = float32FromBits(memory[ground.VHGNDnormy + index]);
-    normalZ = float32FromBits(memory[ground.VHGNDnormz + index]);
-  } else {
-    const control = floatingPoint(machine).control;
-    const step = memory[ground.VHGNDlodstep] << 14;
-    const x0 = memory[ground.VHGNDx] << 14;
-    const z0 = memory[ground.VHGNDz] << 14;
-    const x1 = x0 + step;
-    const z1 = z0 + step;
-    const y0 = -((triangle === 0 ? memory[ground.VHGNDs1] : memory[ground.VHGNDs2]) << 11);
-    const y1 = -((triangle === 0 ? memory[ground.VHGNDs2] : memory[ground.VHGNDs3]) << 11);
-    const y2 = -(memory[ground.VHGNDs4] << 11);
-    const ax = triangle === 0 ? x0 : x1;
-    const az = z0;
-    const bx = x1;
-    const bz = triangle === 0 ? z0 : z1;
-    const cx = x0;
-    const cz = z1;
-    const edge1X = roundFloat32(ax - cx, control);
-    const edge1Y = roundFloat32(y0 - y2, control);
-    const edge1Z = roundFloat32(az - cz, control);
-    const edge2X = roundFloat32(bx - cx, control);
-    const edge2Y = roundFloat32(y1 - y2, control);
-    const edge2Z = roundFloat32(bz - cz, control);
-    normalX = roundFloat32(edge1Y * edge2Z - edge1Z * edge2Y, control);
-    normalY = roundFloat32(edge1Z * edge2X - edge1X * edge2Z, control);
-    normalZ = roundFloat32(edge1X * edge2Y - edge1Y * edge2X, control);
-    memory[ground.VHGNDnormx + index] = float32Bits(normalX);
-    memory[ground.VHGNDnormy + index] = float32Bits(normalY);
-    memory[ground.VHGNDnormz + index] = float32Bits(normalZ);
-    memory[ground.VHGNDnormstamp + index] = generation;
-  }
-
-  const floats = memory[ground.PJfwbase] >>> 0;
   const step = memory[ground.VHGNDlodstep] << 14;
-  const vertexX = memory[ground.VHGNDx] << 14;
+  const x0 = memory[ground.VHGNDx] << 14;
+  const z0 = memory[ground.VHGNDz] << 14;
+  const x1 = x0 + step;
+  const z1 = z0 + step;
+  const vertexX = x0;
   const vertexY = -(memory[ground.VHGNDs4] << 11);
-  const vertexZ = (memory[ground.VHGNDz] << 14) + step;
+  const vertexZ = z1;
   const qwords = machine.noctisFloat64Memory ??= float64View(memory);
-  const base = floats >>> 1;
-  let dot = (qwords[base + 224] - vertexX) * normalX;
-  dot = (qwords[base + 225] - vertexY) * normalY + dot;
-  dot = (qwords[base + 226] - vertexZ) * normalZ + dot;
-  const facing = !Number.isNaN(dot) && dot >= 0;
-  memory[ground.FCret] = facing ? 1 : 0;
-  return facing;
+  const base = (memory[ground.PJfwbase] >>> 0) >>> 1;
+  const cameraX = qwords[base + 224];
+  const cameraY = qwords[base + 225];
+  const cameraZ = qwords[base + 226];
+  let control;
+  let facingMask = 0;
+  for (let triangle = 0; triangle < 2; triangle += 1) {
+    memory[ground.VHGNDvctri] = triangle;
+    const index = firstIndex + triangle;
+    memory[ground.VHGNDnormindex] = index;
+    let normalX;
+    let normalY;
+    let normalZ;
+    if ((memory[ground.VHGNDnormstamp + index] | 0) === generation) {
+      normalX = float32FromBits(memory[ground.VHGNDnormx + index]);
+      normalY = float32FromBits(memory[ground.VHGNDnormy + index]);
+      normalZ = float32FromBits(memory[ground.VHGNDnormz + index]);
+    } else {
+      control ??= floatingPoint(machine).control;
+      const y0 = -((triangle === 0
+        ? memory[ground.VHGNDs1] : memory[ground.VHGNDs2]) << 11);
+      const y1 = -((triangle === 0
+        ? memory[ground.VHGNDs2] : memory[ground.VHGNDs3]) << 11);
+      const y2 = vertexY;
+      const ax = triangle === 0 ? x0 : x1;
+      const az = z0;
+      const bx = x1;
+      const bz = triangle === 0 ? z0 : z1;
+      const cx = x0;
+      const cz = z1;
+      const edge1X = roundFloat32(ax - cx, control);
+      const edge1Y = roundFloat32(y0 - y2, control);
+      const edge1Z = roundFloat32(az - cz, control);
+      const edge2X = roundFloat32(bx - cx, control);
+      const edge2Y = roundFloat32(y1 - y2, control);
+      const edge2Z = roundFloat32(bz - cz, control);
+      normalX = roundFloat32(edge1Y * edge2Z - edge1Z * edge2Y, control);
+      normalY = roundFloat32(edge1Z * edge2X - edge1X * edge2Z, control);
+      normalZ = roundFloat32(edge1X * edge2Y - edge1Y * edge2X, control);
+      memory[ground.VHGNDnormx + index] = float32Bits(normalX);
+      memory[ground.VHGNDnormy + index] = float32Bits(normalY);
+      memory[ground.VHGNDnormz + index] = float32Bits(normalZ);
+      memory[ground.VHGNDnormstamp + index] = generation;
+    }
+    let dot = (cameraX - vertexX) * normalX;
+    dot = (cameraY - vertexY) * normalY + dot;
+    dot = (cameraZ - vertexZ) * normalZ + dot;
+    const facing = !Number.isNaN(dot) && dot >= 0;
+    memory[ground.FCret] = facing ? 1 : 0;
+    if (facing) facingMask |= 1 << triangle;
+  }
+  return facingMask;
 }
 
 function terrainTileShadeDirect(machine, p) {
@@ -11996,10 +12016,9 @@ function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
   memory[p.VHGNDtilepolys] = 0;
   memory[p.PJfwbase] = p.fw;
 
-  memory[p.VHGNDvctri] = 0;
-  const facing0 = terrainFacingDirect(machine, p, 0);
-  memory[p.VHGNDvctri] = 1;
-  const facing1 = terrainFacingDirect(machine, p, 1);
+  const facingMask = terrainFacingPairDirect(machine, p);
+  const facing0 = (facingMask & 1) !== 0;
+  const facing1 = (facingMask & 2) !== 0;
   const facingCount = (facing0 ? 1 : 0) + (facing1 ? 1 : 0);
   memory[p.VHGNDtilepolys] = facingCount;
   if (facingCount === 0) {
