@@ -4535,6 +4535,238 @@ function mappedTerrainScanline(machine, p) {
   }
 }
 
+function mappedTerrainTraceAligned(machine, p) {
+  const memory = machine.memory;
+  const control = floatingPoint(machine).control;
+  const qwords = machine.noctisFloat64Memory ??= float64View(memory);
+  const base = (memory[p.PGfwbase] >>> 0) >>> 1;
+  const fa = p.FA0 >>> 1;
+  const ipart = p.ipart;
+  const fpart = p.fpart;
+  const texture = p.nw + p.RPBG + (memory[p.PGtexoff] | 0);
+  const page = p.page;
+  const tint = memory[p.SPtinta] | 0;
+  const culling = (memory[p.SPcull] & 1) !== 0;
+  const blockSize = culling ? 32 : 16;
+
+  mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, tint);
+  mappedPageStore(memory, p, (p.PGSCRE + p.PGDOFF) & 0xffff, memory[p.SPescr]);
+  memory[p.PJfwbase] = p.fw;
+  memory[p.PJipartbase] = ipart;
+  memory[p.PGfwbase] = p.fw;
+  memory[p.PGnwbase] = p.nw;
+
+  let spsec = memory[p.SPsec] | 0;
+  let spdi = memory[p.SPdi] & 0xffff;
+  let spcl = memory[p.SPcl] | 0;
+  let spu = memory[p.SPu] | 0;
+  let spv = memory[p.SPv] | 0;
+  let spun = memory[p.SPun] | 0;
+  let spvn = memory[p.SPvn] | 0;
+  let spsi = memory[p.SPsi] | 0;
+  let spbp = memory[p.SPbp] | 0;
+  let spax = memory[p.SPax] | 0;
+  let spdx = memory[p.SPdx] | 0;
+  let spsave = memory[p.SPsave] | 0;
+  let fs0 = memory[p.FS0] | 0;
+  let pguvz = memory[p.PGUVZ] | 0;
+  let pguvx = memory[p.PGUVX] | 0;
+  let pguvy = memory[p.PGUVY] | 0;
+  let pguvk4 = memory[p.PGUVK4] | 0;
+  let finalFa = qwords[fa];
+
+  let row = memory[p.BXminy] | 0;
+  const maximum = memory[p.BXmaxy] | 0;
+  for (; row <= maximum; row += 1) {
+    let factor = memory[ipart + row] | 0;
+    factor -= qwords[base + 19];
+    factor += qwords[base + 18];
+    qwords[base + 251] = factor;
+
+    let z = factor * qwords[base + 5];
+    let rowPart = row - qwords[base + 20];
+    z = rowPart * qwords[base + 2] + z;
+    z += qwords[base + 8];
+    qwords[base + 248] = factor * qwords[base + 5];
+    qwords[base + 249] = z;
+    z = Math.fround(z);
+    fs0 = float32Bits(z);
+    qwords[base + 15] = z;
+
+    let reciprocal = qwords[base + 18] / z;
+    reciprocal = Math.fround(reciprocal);
+    fs0 = float32Bits(reciprocal);
+    qwords[base + 12] = reciprocal;
+
+    let x = factor * qwords[base + 3];
+    qwords[base + 248] = x;
+    x = rowPart * qwords[base] + x;
+    x += qwords[base + 6];
+    x = Math.fround(x);
+    fs0 = float32Bits(x);
+    qwords[base + 13] = x;
+
+    let y = factor * qwords[base + 4];
+    qwords[base + 248] = y;
+    y = rowPart * qwords[base + 1] + y;
+    y += qwords[base + 7];
+    y = Math.fround(y);
+    fs0 = float32Bits(y);
+    qwords[base + 14] = y;
+
+    let result = x * qwords[base + 16];
+    result *= reciprocal;
+    spu = convertToInt32(result, control);
+    result = y * qwords[base + 17];
+    result *= reciprocal;
+    spv = convertToInt32(result, control);
+    finalFa = result;
+
+    const first = memory[ipart + row] | 0;
+    spsec = ((memory[fpart + row] | 0) - first) | 0;
+    spdi = (Math.imul(row, 320) + first) & 0xffff;
+    let remaining = spsec;
+    while (remaining > 0) {
+      let count = remaining > blockSize ? blockSize
+        : culling ? (remaining + 2) & 0xff : remaining & 0xff;
+      remaining = (remaining - blockSize) | 0;
+      spsec = remaining;
+      if (culling) {
+        if (count < 2) continue;
+        count >>>= 1;
+      } else if (count === 0) continue;
+      spcl = count;
+
+      z = qwords[base + p.FSZ] + qwords[base + p.FSK3];
+      qwords[base + p.FSW0] = z;
+      z = Math.fround(z);
+      pguvz = float32Bits(z);
+      qwords[base + p.FSZ] = z;
+      x = qwords[base + p.FSX] + qwords[base + p.FSK1];
+      qwords[base + p.FSW1] = x;
+      x = Math.fround(x);
+      pguvx = float32Bits(x);
+      qwords[base + p.FSX] = x;
+      y = qwords[base + p.FSY] + qwords[base + p.FSK2];
+      qwords[base + p.FSW2] = y;
+      y = Math.fround(y);
+      pguvy = float32Bits(y);
+      qwords[base + p.FSY] = y;
+      reciprocal = qwords[base + p.FSUNO] / z;
+      qwords[base + p.FSW3] = reciprocal;
+      reciprocal = Math.fround(reciprocal);
+      pguvk4 = float32Bits(reciprocal);
+      fs0 = pguvk4;
+      qwords[base + p.FSK4] = reciprocal;
+      result = x * qwords[base + p.FSTX];
+      qwords[base + p.FSW3] = result;
+      result *= reciprocal;
+      qwords[base + p.FSW3] = result;
+      spun = convertToInt32(result, control);
+      result = y * qwords[base + p.FSTY];
+      qwords[base + p.FSW3] = result;
+      result *= reciprocal;
+      qwords[base + p.FSW3] = result;
+      spvn = convertToInt32(result, control);
+
+      spbp = ((spun - spu) >> 4) & 0xffff;
+      spsi = ((spvn - spv) >> 4) & 0xffff;
+      let u = spu & 0xffff;
+      let v = spv & 0xffff;
+      spax = u;
+      spdx = v;
+      spu = spun;
+      spv = spvn;
+      let di = spdi;
+      const start = di;
+      if (culling) {
+        spsave = start;
+        let pixelIndex = 0;
+        for (; pixelIndex + 3 < count; pixelIndex += 4) {
+          di += 2;
+          let index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          let pixel = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          memory[page + di + 2] = pixel; memory[page + di + 3] = pixel;
+          di += 2;
+          index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          pixel = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          memory[page + di + 2] = pixel; memory[page + di + 3] = pixel;
+          di += 2;
+          index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          pixel = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          memory[page + di + 2] = pixel; memory[page + di + 3] = pixel;
+          di += 2;
+          index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          pixel = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          memory[page + di + 2] = pixel; memory[page + di + 3] = pixel;
+        }
+        for (; pixelIndex < count; pixelIndex += 1) {
+          di += 2;
+          const index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          const pixel = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          memory[page + di + 2] = pixel; memory[page + di + 3] = pixel;
+        }
+        spdi = (start + 32) & 0xffff;
+      } else {
+        let pixelIndex = 0;
+        for (; pixelIndex + 3 < count; pixelIndex += 4) {
+          di += 1;
+          let index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          memory[page + di + 3] = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          di += 1;
+          index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          memory[page + di + 3] = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          di += 1;
+          index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          memory[page + di + 3] = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+          di += 1;
+          index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          memory[page + di + 3] = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+        }
+        for (; pixelIndex < count; pixelIndex += 1) {
+          di += 1;
+          const index = ((v & 0xff00) | ((u >>> 8) & 0xff)) & 0xffff;
+          memory[page + di + 3] = ((memory[texture + index] & 0xff) + tint) & 0xff;
+          u = (u + spbp) & 0xffff; v = (v + spsi) & 0xffff;
+        }
+        spdi = di;
+      }
+      spax = u;
+      spdx = v;
+      spcl = 0;
+    }
+  }
+
+  qwords[fa] = finalFa;
+  memory[p.SPi] = row;
+  memory[p.SPsec] = spsec;
+  memory[p.SPdi] = spdi;
+  memory[p.SPcl] = spcl;
+  memory[p.SPu] = spu;
+  memory[p.SPv] = spv;
+  memory[p.SPun] = spun;
+  memory[p.SPvn] = spvn;
+  memory[p.SPsi] = spsi;
+  memory[p.SPbp] = spbp;
+  memory[p.SPax] = spax;
+  memory[p.SPdx] = spdx;
+  memory[p.SPsave] = spsave;
+  memory[p.FS0] = fs0;
+  memory[p.PGUVZ] = pguvz;
+  memory[p.PGUVX] = pguvx;
+  memory[p.PGUVY] = pguvy;
+  memory[p.PGUVK4] = pguvk4;
+}
+
 function mappedScanline(machine, linked, p) {
   const memory = machine.memory;
   let remaining = memory[p.SPsec] | 0;
@@ -4601,6 +4833,14 @@ function mappedHalfScan(machine, linked, p, fast) {
 
 function mappedTrace(machine, linked, p) {
   const memory = machine.memory;
+  if ((memory[p.SPterrain] | 0) !== 0
+      && (memory[p.SPhalf] & 1) === 0
+      && (floatingPoint(machine).control & 0x0c00) === 0
+      && ((memory[p.PGfwbase] | 0) & 1) === 0
+      && (p.FA0 & 1) === 0) {
+    mappedTerrainTraceAligned(machine, p);
+    return;
+  }
   mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, memory[p.SPtinta]);
   mappedPageStore(memory, p, (p.PGSCRE + p.PGDOFF) & 0xffff, memory[p.SPescr]);
   memory[p.PJfwbase] = p.fw;
