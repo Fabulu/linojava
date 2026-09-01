@@ -237,6 +237,7 @@ const SERVICE_IDS = Object.freeze({
   uafCopyCommon: "service:uafcopycommon",
   xMul32u: "service:xmul32u",
   xRootCore: "service:xrootcore",
+  xTrigBit: "service:xtrigbit",
   compareFloat64: "service:fcmp",
   spaceClear: "service:vhgspaceclear",
   interiorSmooth64: "service:vhginteriorsmooth64",
@@ -346,6 +347,7 @@ const ekeyAddressCaches = new WeakMap();
 const surfaceBulkAddressCaches = new WeakMap();
 const xMul32uAddressCaches = new WeakMap();
 const xRootCoreAddressCaches = new WeakMap();
+const xTrigBitAddressCaches = new WeakMap();
 const paletteShadeAddressCaches = new WeakMap();
 const paletteTavolaAddressCaches = new WeakMap();
 const groundRoundHillAddressCaches = new WeakMap();
@@ -1801,6 +1803,55 @@ function xRootCoreInline(linked) {
     m[${p.remainder0}]=xrRemainder0;m[${p.remainder1}]=xrRemainder1;m[${p.remainder2}]=xrRemainder2;m[${p.remainder3}]=xrE;
     m[${p.mantissaHigh}]=xrOutputHigh;m[${p.mantissaLow}]=xrOutputLow;m[${p.exponent}]=xrExponent;m[${p.sign}]=0;
     A=xrExponent;B=xrB;C=xrC;D=xrD;E=xrE;X=${LINO_DONE};
+  }`;
+}
+
+function xTrigBitAddresses(linked) {
+  let cached = xTrigBitAddressCaches.get(linked);
+  if (cached) return cached;
+  cached = {
+    position: address(linked, "xtpos"),
+    index: address(linked, "xtk"),
+    remainder: address(linked, "xtrem"),
+    bit: address(linked, "xtbit"),
+    product: address(linked, "XPAY"),
+  };
+  xTrigBitAddressCaches.set(linked, cached);
+  return cached;
+}
+
+function xTrigBit(machine, linked) {
+  const memory = machine.memory;
+  const p = xTrigBitAddresses(linked);
+  const position = memory[p.position] | 0;
+  if (position < 0 || position >= 320) {
+    memory[p.bit] = 0;
+    machine.X = LINO_DONE;
+    return;
+  }
+  const index = position >>> 4;
+  const remainder = position & 15;
+  const pointer = p.product + index;
+  const bit = (memory[pointer] >>> remainder) & 1;
+  memory[p.index] = index;
+  memory[p.remainder] = remainder;
+  memory[p.bit] = bit;
+  machine.A = bit;
+  machine.B = remainder;
+  machine.E = pointer;
+  machine.X = LINO_DONE;
+}
+
+function xTrigBitInline(linked) {
+  const p = xTrigBitAddresses(linked);
+  return `{
+    const xbtPosition=m[${p.position}]|0;
+    if(xbtPosition<0||xbtPosition>=320){m[${p.bit}]=0;}
+    else{const xbtIndex=xbtPosition>>>4,xbtRemainder=xbtPosition&15,xbtPointer=${p.product}+xbtIndex;
+      const xbtBit=(m[xbtPointer]>>>xbtRemainder)&1;
+      m[${p.index}]=xbtIndex;m[${p.remainder}]=xbtRemainder;m[${p.bit}]=xbtBit;
+      A=xbtBit;B=xbtRemainder;E=xbtPointer;}
+    X=${LINO_DONE};
   }`;
 }
 
@@ -14058,6 +14109,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.uafCopyCommon]: uafCopyCommon,
     [SERVICE_IDS.xMul32u]: xMul32u,
     [SERVICE_IDS.xRootCore]: xRootCore,
+    [SERVICE_IDS.xTrigBit]: xTrigBit,
     [SERVICE_IDS.compareFloat64]: compareFloat64Service,
     [SERVICE_IDS.spaceClear]: spaceClear,
     [SERVICE_IDS.interiorSmooth64]: interiorSmooth64,
@@ -14407,6 +14459,9 @@ export function createNoctisIntrinsics(overrides = {}) {
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.xRootCore)) {
     implementations[SERVICE_IDS.xRootCore].inline = xRootCoreInline;
+  }
+  if (!Object.hasOwn(overrides, SERVICE_IDS.xTrigBit)) {
+    implementations[SERVICE_IDS.xTrigBit].inline = xTrigBitInline;
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.groundHudLampSmooth)) {
     implementations[SERVICE_IDS.groundHudLampSmooth].inline = groundHudLampSmoothInline;

@@ -219,6 +219,146 @@ test("static unsigned multiply service matches its shared Lino fallback", async 
   assert.equal(serviceCalls, pairs.length);
 });
 
+test("static trigonometric bit service matches all shared Lino call paths", async () => {
+  const source = `
+    "variables"
+      xtpos = 0; xtk = 0; xtrem = 0; xtbit = 0;
+      selector = 0; continuation = 0; stack first = 0; stack second = 0;
+      bit pointer = XTrigBit;
+    "workspace" XPAY = 20;
+    "programme"
+      A = [selector];
+      ? A = 0 -> Call zero;
+      ? A = 1 -> Call one;
+      -> Call two;
+    "Call zero"
+      A = 111; A -->; A = 222; A -->; => XTrigBit;
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = 10; end;
+    "Call one"
+      A = 111; A -->; A = 222; A -->; => XTrigBit;
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = 20; end;
+    "Call two"
+      A = 111; A -->; A = 222; A -->; => XTrigBit;
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = 30; end;
+    "Indirect bit"
+      A = 111; A -->; A = 222; A -->; => [bit pointer];
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = 40; end;
+    "XTrigBit"
+      ? [xtpos] < 0 -> XTB zero;
+      ? [xtpos] >= 320 -> XTB zero;
+      A = [xtpos]; A / 16; [xtk] = A;
+      A = [xtpos]; A & 15; [xtrem] = A;
+      E = XPAY; E + [xtk]; A = [E]; B = [xtrem]; A > B; A & 1; [xtbit] = A;
+      end;
+    "XTB zero"
+      [xtbit] = 0; end;
+  `;
+  const project = await loadProject("xtrigbit-service.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const implementation = allIntrinsics[NOCTIS_SERVICES.xTrigBit];
+  const intrinsics = { [NOCTIS_SERVICES.xTrigBit]: implementation };
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const direct = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    intrinsics: {
+      [NOCTIS_SERVICES.xTrigBit](machine, directLinked) {
+        serviceCalls += 1;
+        implementation(machine, directLinked);
+      },
+    },
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const programs = [fallback, direct, precompiled];
+  const at = (name) => linked.symbols.get(name).value;
+  const initialize = (program, selector, position) => {
+    program.reset();
+    const memory = program.machine.memory;
+    memory[at("selector")] = selector;
+    memory[at("xtpos")] = position;
+    memory[at("xtk")] = 0x55555555;
+    memory[at("xtrem")] = 0x66666666;
+    memory[at("xtbit")] = 0x77777777;
+    for (let index = 0; index < 20; index += 1) {
+      memory[at("xpay") + index] = Math.imul(index + 1, 0x13579bdf) | 0;
+    }
+    program.machine.A = 11;
+    program.machine.B = 13;
+    program.machine.C = 17;
+    program.machine.D = 19;
+    program.machine.E = 23;
+    program.machine.X = 0x6661696c;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X, program.machine.depth, program.machine.halted,
+    ],
+    stack: [...program.machine.stack.subarray(0, program.machine.depth)],
+  });
+  const positions = [
+    -2147483648, -1, 0, 1, 14, 15, 16, 17, 158, 159, 160,
+    303, 304, 318, 319, 320, 2147483647,
+  ];
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 64; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    positions.push((random >>> 0) % 320);
+  }
+
+  for (let index = 0; index < positions.length; index += 1) {
+    const selector = index % 3;
+    for (const program of programs) {
+      initialize(program, selector, positions[index]);
+      assert.equal(program.run(1_000).status, "halted");
+    }
+    assert.equal(fallback.machine.memory[at("continuation")], 10 * (selector + 1));
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+    assert.equal(fallback.machine.memory[at("stackfirst")], 111);
+    assert.equal(fallback.machine.memory[at("stacksecond")], 222);
+  }
+  assert.equal(serviceCalls, positions.length);
+
+  for (const label of ["indirectbit", "xtrigbit"]) {
+    for (const program of programs) {
+      initialize(program, 0, 159);
+      program.machine.pc = linked.labels.get(label);
+      assert.equal(program.run(1_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+  }
+  assert.equal(serviceCalls, positions.length);
+
+  const bitHandle = linked.labels.get("xtrigbit") + 1;
+  for (const program of programs) {
+    initialize(program, 0, 319);
+    const outerPc = program.machine.pc;
+    assert.ok(program.machine.callCode(bitHandle, 1_000) > 0);
+    assert.equal(program.machine.pc, outerPc);
+  }
+  assert.deepEqual(state(direct), state(fallback));
+  assert.deepEqual(state(precompiled), state(fallback));
+  assert.equal(serviceCalls, positions.length);
+});
+
 test("static restoring-root service matches all shared Lino call paths", async () => {
   const source = `
     "constants" XBIAS = 16383; XM16 = 65535;
