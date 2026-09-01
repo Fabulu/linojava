@@ -14,7 +14,7 @@ function fixture() {
     "VHGUIsrc", "VHGUIpal", "VHGUIdst", "VHGUIrow2", "VHGUIdstp",
     "VHGUIrow2p", "VHGUIgap", "VHGUIdw", "VHGUIdh", "VHGUIsy",
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
-    "VHTcyclebase", "nw",
+    "VHTmaski", "VHTcyclebase", "nw",
     "RADPT", "VHGNDblurpasses", "VHGNDblursize", "VHGNDblurp",
     "VHGNDblurcount", "VHGNDblurval", "VHGNDmushinner",
     "VHGNDmushcolmask", "VHGNDmushbase",
@@ -136,6 +136,40 @@ test("surface blur service preserves the shared Lino loop", () => {
   assert.equal(machine.C, expected[count - 1 + 320] & 0xc0);
   assert.equal(machine.D, base + count - 1);
   assert.equal(machine.E, base + count - 1 + 320);
+});
+
+test("star-page mask service preserves the shared Lino loop", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  linked.symbols.get(canonicalName("nw")).value = 100_000;
+  const base = 150_000;
+  const count = 58_240;
+  const expected = new Int32Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const pixel = (index * 73 + 11) & 0xff;
+    memory[base + index] = pixel;
+    expected[index] = (pixel & 0x3f) + 0x40;
+  }
+  memory[base - 1] = 0x1234;
+  memory[base + count] = 0x5678;
+  memory[at("VHTmaskbase")] = 50_000;
+  memory[at("VHTmaski")] = 0;
+  machine.B = 17;
+  machine.D = 19;
+  machine.E = 23;
+
+  intrinsic[SERVICES.starMaskPage](machine, linked);
+
+  assert.deepEqual([...memory.subarray(base, base + count)], [...expected]);
+  assert.equal(memory[base - 1], 0x1234);
+  assert.equal(memory[base + count], 0x5678);
+  assert.equal(memory[at("VHTmaski")], count);
+  assert.equal(machine.A, count);
+  assert.equal(machine.B, 17);
+  assert.equal(machine.C, expected[count - 1]);
+  assert.equal(machine.D, 19);
+  assert.equal(machine.E, 23);
 });
 
 test("Noctis integer and framebuffer intrinsics preserve the native kernels", () => {
