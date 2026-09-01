@@ -6,8 +6,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { linkProject } from "../src/compiler/linker.js";
+import { canonicalName } from "../src/compiler/lexer.js";
 import { loadProject } from "../src/compiler/project-loader.js";
 import { emitStaticRunnerModule } from "../src/compiler/project-compiler.js";
+import {
+  createNoctisIntrinsics,
+  NOCTIS_SERVICE_INTRINSIC_IDS as SERVICES,
+} from "../src/intrinsics/noctis.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LINO_ROOT = resolve(process.env.LINO_SOURCE_DIR ?? resolve(HERE, "../../linoleum"));
@@ -59,13 +64,63 @@ async function instantiateStaticRunners(linked) {
   assert.equal(runners.length, Math.ceil(linked.instructions.length / generated.regionSize));
 }
 
+function exerciseDirectNoctisWorkspaces(linked) {
+  for (const name of [
+    "PJfwbase", "PGfwbase", "VHSfwbase", "PJmpbase", "PJipartbase",
+    "PGipartbase", "PJrwfbase", "PGnwbase", "PGfpartbase", "VHGNDdensebase",
+    "PJthird0", "PJthird1", "PGUVZ", "PGUVX", "PGUVY", "PGUVK4",
+  ]) {
+    assert.equal(linked.symbols.has(canonicalName(name)), false, `${name} is not a source symbol`);
+  }
+
+  const machine = {
+    memory: new Int32Array(linked.initialMemory),
+    A: 0, B: 0, C: 0, D: 0, E: 0, X: 0,
+  };
+  const at = (name) => linked.symbols.get(canonicalName(name)).value;
+  const intrinsics = createNoctisIntrinsics();
+  const view = new DataView(machine.memory.buffer);
+  const vertices = [
+    [1.25, -2.5, 3.75],
+    [4.5, 5.25, -6.75],
+    [-7.5, 8.125, 9.5],
+    [10.25, -11.5, 12.75],
+  ];
+  const polygon = at("vhcpoly");
+  for (let vertex = 0; vertex < vertices.length; vertex += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      view.setFloat32((polygon + vertex * 3 + axis) * 4, vertices[vertex][axis], true);
+    }
+  }
+
+  intrinsics[SERVICES.panelMappedQuadLoad](machine, linked);
+  const fw = at("fw");
+  const slots = [at("FSINX"), at("FSINY"), at("FSINZ")];
+  for (let vertex = 0; vertex < vertices.length; vertex += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      assert.equal(
+        view.getFloat64((fw + slots[axis] * 2 + vertex * 2) * 4, true),
+        vertices[vertex][axis],
+      );
+    }
+  }
+
+  machine.memory[at("PJpreproject")] = 1;
+  machine.memory[at("PJnrv")] = 4;
+  machine.memory[at("PJdoflag")] = 0;
+  intrinsics[SERVICES.polymap](machine, linked);
+  assert.equal(machine.memory[at("PJgate")], 1);
+}
+
 test("current shared Noctis and NIVGEN closures emit static runners", {
   skip: !existsSync(GAME_ENTRY) && `No sibling Linoleum checkout at ${LINO_ROOT}`,
 }, async () => {
   const game = await loadClosure(GAME_ENTRY);
   assert.equal(game.modules.length, 74);
   assert.equal(game.stockfiles.length, 23);
-  await instantiateStaticRunners(linkProject(game));
+  const linkedGame = linkProject(game);
+  exerciseDirectNoctisWorkspaces(linkedGame);
+  await instantiateStaticRunners(linkedGame);
 
   let source = (await readFile(GAME_ENTRY, "utf8")).replaceAll("\r\n", "\n");
   const libraries = "vhspace; vhstar; vhground; vhcapsule;";

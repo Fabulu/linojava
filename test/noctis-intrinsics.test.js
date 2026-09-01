@@ -20,7 +20,7 @@ function fixture() {
     "VHTsmoothbase", "SPcpfrom", "SPcpto", "PVj", "SCcx", "SCdi",
     "SCal", "SCzf", "DBal", "CSbyte", "SGpi", "SGpf", "SGgx", "SGgy",
     "SGa", "SGb", "SGt", "DBdi", "DBcx", "DBdl",
-    "EWminy", "EWmaxy", "PGfpartbase", "PGipartbase", "PGi", "PGnwbase",
+    "EWminy", "EWmaxy", "fpart", "ipart", "PGi",
     "RPBG", "SPdi", "SPax", "SPdx", "SPcl", "SPbp", "SPsi", "PGtexoff",
     "SPtinta", "SPn", "FCW",
     "VHGNDbgsourcenative", "VHGNDpageclearptr", "VHGNDbgcachefrom",
@@ -28,8 +28,8 @@ function fixture() {
     "VHGNDbgdestinationnative", "BGbp", "BGcxr", "BGdx", "BGw", "BGdi",
     "BGpx", "BGi", "VHGNDbgrowbase", "VHGNDmpbase", "PJminx", "PJmaxx",
     "BXminy", "BXmaxy", "VHGNDh1", "VHGNDseed", "SUfseed", "SUfeax",
-    "SUfmask", "SUfval",
-    "PJfwbase", "PJnrv", "PJvr", "PJvr2", "PJvr22", "PJrwfbase",
+    "SUfmask", "SUfval", "SUsi",
+    "mp", "rwf", "PJnrv", "PJvr", "PJvr2", "PJvr22",
     "PJdoflag", "FCWSAV", "FCWTMP", "FSW", "FCWCSAV", "FCWCHOP",
     "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
@@ -39,7 +39,7 @@ function fixture() {
     "gcsav", "gcchop", "gcQ0", "gcT0", "gcK0", "gcTen0", "gcHun0",
     "gcFif0", "gcFiv0", "gcFvt0", "gcTwo0", "gcMil0", "gcCen0",
     "gcFivp0", "gcTent0", "gc41120",
-    "VHSstarptr", "VHSfwbase", "VHSdx0", "VHSdy0", "VHSdz0", "VHSdepth",
+    "VHSstarptr", "VHSdx0", "VHSdy0", "VHSdz0", "VHSdepth",
     "GCx", "GCy",
     "rgt", "GBbubble", "GBmag", "GBcx", "GBcy", "GBdstreg", "SAr",
     "SArs", "SAtcx", "SAtcy", "SAdif", "SAx1", "SAy1", "SAx2", "SAy2",
@@ -246,8 +246,8 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
 
   memory[at("EWminy")] = 2;
   memory[at("EWmaxy")] = 3;
-  memory[at("PGfpartbase")] = 1_500_000;
-  memory[at("PGipartbase")] = 1_500_100;
+  linked.symbols.get(canonicalName("fpart")).value = 1_500_000;
+  linked.symbols.get(canonicalName("ipart")).value = 1_500_100;
   run(IDS.initializePolygonRows);
   assert.deepEqual([...memory.slice(1_500_002, 1_500_004)], [5, 5]);
   assert.deepEqual([...memory.slice(1_500_102, 1_500_104)], [311, 311]);
@@ -255,7 +255,13 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
 
   linked.symbols.get(canonicalName("RPBG")).value = 100;
   linked.symbols.get(canonicalName("SADPT")).value = 1000;
-  memory[at("PGnwbase")] = 1_400_000;
+  linked.symbols.get(canonicalName("nw")).value = 1_400_000;
+  const denseBase = at("nw") + at("RADPT") + 2880;
+  memory[at("SUsi")] = 320;
+  for (const row of [0, 320, 640, 960]) memory.fill(16, denseBase + row, denseBase + row + 4);
+  run(IDS.landedDenseAverage);
+  assert.equal(memory[denseBase + 320], 16);
+
   memory[at("SPdi")] = 0;
   memory[at("SPax")] = 0x0100;
   memory[at("SPdx")] = 0x0200;
@@ -365,7 +371,7 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   assert.equal(memory[at("SUfseed")], (tileSeed + tileFolded) | 0);
   assert.equal(memory[at("SUfval")], tileFolded & 7);
 
-  memory[at("PJfwbase")] = 1_700_000;
+  linked.symbols.get(canonicalName("fw")).value = 1_700_000;
   memory[at("PJnrv")] = 2;
   memory.set([1, 2, 3, 4], 1_700_064);
   memory.set([5, 6, 7, 8], 1_700_072);
@@ -390,7 +396,7 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   memory.set([201, 202], 1_700_068);
   memory.set([203, 204], 1_700_076);
   memory.set([205, 206], 1_700_084);
-  memory[at("PJrwfbase")] = 1_701_000;
+  linked.symbols.get(canonicalName("rwf")).value = 1_701_000;
   memory[1_701_002] = 1;
   memory[at("PJdoflag")] = 2;
   run(IDS.duplicateMappedRotation);
@@ -575,7 +581,7 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   view.setFloat64(at("VHSdx0") * 4, 0, true);
   view.setFloat64(at("VHSdy0") * 4, 0, true);
   view.setFloat64(at("VHSdz0") * 4, 0, true);
-  memory[at("VHSfwbase")] = 1_880_000;
+  linked.symbols.get(canonicalName("fw")).value = 1_880_000;
   run(IDS.spaceRelativeCoordinates);
   assert.deepEqual(
     [view.getFloat64((1_880_000 + 504) * 4, true), view.getFloat64((1_880_000 + 512) * 4, true), view.getFloat64((1_880_000 + 520) * 4, true)],
@@ -850,7 +856,6 @@ test("rectangle restores its source pixel counter after each scanline", () => {
 test("mapped UV stepping keeps wide temporaries out of camera slots", () => {
   const fixed = new Map(Object.entries({
     fw: 10_000,
-    pgfwbase: 500,
     fsz: 15,
     fsx: 13,
     fsy: 14,
@@ -865,12 +870,9 @@ test("mapped UV stepping keeps wide temporaries out of camera slots", () => {
     fsw1: 249,
     fsw2: 250,
     fsw3: 251,
-    pguvz: 520,
-    pguvx: 521,
-    pguvy: 522,
-    pguvk4: 523,
-    spun: 524,
-    spvn: 525,
+    fs0: 520,
+    spun: 521,
+    spvn: 522,
   }).map(([name, value]) => [canonicalName(name), { name, value }]));
   let nextAddress = 600;
   const linked = {
@@ -893,7 +895,6 @@ test("mapped UV stepping keeps wide temporaries out of camera slots", () => {
   const at = (name) => linked.symbols.get(canonicalName(name)).value;
   const write = (slot, value) => view.setFloat64((at("fw") + slot * 2) * 4, value, true);
   const read = (slot) => view.getFloat64((at("fw") + slot * 2) * 4, true);
-  memory[at("PGfwbase")] = at("fw");
   write(at("FSZ"), 10);
   write(at("FSX"), 20);
   write(at("FSY"), 30);
@@ -912,6 +913,7 @@ test("mapped UV stepping keeps wide temporaries out of camera slots", () => {
   assert.equal(read(at("FSW0")), 12);
   assert.equal(read(at("FSW1")), 23);
   assert.equal(read(at("FSW2")), 34);
+  assert.equal(view.getFloat32(at("FS0") * 4, true), Math.fround(1 / 12));
   assert.equal(memory[at("SPun")], 491);
   assert.equal(memory[at("SPvn")], 363);
 });

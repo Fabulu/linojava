@@ -921,7 +921,7 @@ function noctisBuffer(linked, offsetName) {
 }
 
 function polygonBuffer(memory, linked, offsetName) {
-  return (value(memory, linked, "PGnwbase") + address(linked, offsetName)) >>> 0;
+  return (address(linked, "nw") + address(linked, offsetName)) >>> 0;
 }
 
 function copyRegion(machine, linked) {
@@ -3034,15 +3034,14 @@ function polymapAddresses(linked) {
     "SPtrifast", "SPcull", "SPhalf", "SPflar", "SPtinta", "SPescr", "SPsrc",
     "SPi", "SPsec", "SPdi", "SPcl", "SPu", "SPv", "SPun", "SPvn", "SPax",
     "SPdx", "SPbp", "SPsi", "SPch", "SPbx", "SPt", "SPn", "SPsave",
-    "PJfwbase", "PJmpbase", "PJipartbase", "PGfwbase", "PGnwbase", "PGfpartbase", "PGipartbase", "PGtexf", "PGtexoff",
+    "PGtexf", "PGtexoff",
     "PGtexi", "PGtexv", "PGtmp", "PGdi", "PGval", "PGi", "PGj", "CSpix",
     "EWvr22", "EWminy", "EWmaxy", "EWsi", "EWx1", "EWy1", "EWx2", "EWy2",
     "EWity", "EWjty", "EWax", "EWcx", "EWh", "FS16", "FSVX", "FSVY",
     "FSVZ", "FSK1", "FSK2", "FSK3", "FSK4", "FSX", "FSY", "FSZ", "FSTX", "FSTY",
     "D64THLO", "D64THHI", "D64QLO",
-    "D64QHI", "PJthird0", "PJthird1", "ipart", "fpart", "nw", "SADPT",
-    "RPSM", "RPBG", "RNGLB", "PGSCRT", "PGSCRE", "PGDOFF",
-    "PGUVZ", "PGUVX", "PGUVY", "PGUVK4", "FCret",
+    "D64QHI", "PGFt", "PGFu", "ipart", "fpart", "nw", "SADPT",
+    "RPSM", "RPBG", "RNGLB", "PGSCRT", "PGSCRE", "PGDOFF", "FCret",
   ];
   cached = {
     ...poly3dAddresses(linked),
@@ -3076,11 +3075,11 @@ function prepareMappedVectors(machine, linked, p, vertices, fast) {
   }
   memory[p.PJdx] = vertices;
   if (vertices === 3) {
-    memory[p.PJthird0] = p.D64THLO;
-    memory[p.PJthird1] = p.D64THHI;
+    memory[p.PGFt] = p.D64THLO;
+    memory[p.PGFu] = p.D64THHI;
   } else {
-    memory[p.PJthird0] = p.D64QLO;
-    memory[p.PJthird1] = p.D64QHI;
+    memory[p.PGFt] = p.D64QLO;
+    memory[p.PGFu] = p.D64QHI;
   }
   polygonMidpoint(machine, linked, vertices);
   memory[p.PJvr] = 0;
@@ -3167,9 +3166,9 @@ function prepareTerrainVectorsFast(machine, p, vertices) {
   const view = dataView(memory);
   const floats = p.fw;
   memory[p.PJdx] = vertices;
-  memory[p.PJthird0] = vertices === 3 ? p.D64THLO : p.D64QLO;
-  memory[p.PJthird1] = vertices === 3 ? p.D64THHI : p.D64QHI;
-  const factor = readFloat64View(view, p.PJthird0);
+  memory[p.PGFt] = vertices === 3 ? p.D64THLO : p.D64QLO;
+  memory[p.PGFu] = vertices === 3 ? p.D64THHI : p.D64QHI;
+  const factor = readFloat64View(view, p.PGFt);
   let lastNarrowed = 0;
   const nearest = (control & 0x0c00) === 0;
 
@@ -3293,9 +3292,6 @@ function drawConstantMergerPolygon(machine, linked, p) {
   memory[p.EWvr22] = memory[p.PJvr22];
   memory[p.EWminy] = memory[p.BXminy];
   memory[p.EWmaxy] = memory[p.BXmaxy];
-  memory[p.PGfwbase] = p.fw;
-  memory[p.PGfpartbase] = p.fpart;
-  memory[p.PGipartbase] = p.ipart;
   initializePolygonRows(machine, linked, p);
   polygonEdges(machine, linked, p);
   memory[p.SPsrc] = 1;
@@ -3367,12 +3363,6 @@ function polymap(machine, linked, preRotated = false) {
     if ((memory[p.PJvr2] | 0) < 3) return;
   }
   if ((memory[p.PJpreproject] | 0) === 0) {
-    // The standalone mapped-projector intrinsic mirrors the native source
-    // fragment, whose caller publishes these two bases immediately before
-    // entering it.  PG polymap's fused path bypasses that source wrapper, so
-    // preserve the same contract explicitly here.
-    memory[p.PJfwbase] = p.fw;
-    memory[p.PJmpbase] = p.mp;
     projectMappedPolygon(machine, linked);
   }
   memory[p.PJpreproject] = 0;
@@ -3402,9 +3392,6 @@ function polymap(machine, linked, preRotated = false) {
   memory[p.EWvr22] = memory[p.PJvr22];
   memory[p.EWminy] = memory[p.BXminy];
   memory[p.EWmaxy] = memory[p.BXmaxy];
-  memory[p.PGfwbase] = p.fw;
-  memory[p.PGfpartbase] = p.fpart;
-  memory[p.PGipartbase] = p.ipart;
   initializePolygonRows(machine, linked, p);
   polygonEdges(machine, linked, p);
   memory[p.SPsrc] = 1;
@@ -3429,9 +3416,6 @@ function rasterProjectedTerrain(machine, linked, p) {
   memory[p.EWvr22] = 8;
   memory[p.EWminy] = memory[p.BXminy];
   memory[p.EWmaxy] = memory[p.BXmaxy];
-  memory[p.PGfwbase] = p.fw;
-  memory[p.PGfpartbase] = p.fpart;
-  memory[p.PGipartbase] = p.ipart;
   initializePolygonRows(machine, linked, p);
   polygonEdges(machine, linked, p);
   memory[p.SPsrc] = 1;
@@ -3442,12 +3426,12 @@ function initializePolygonRows(machine, linked, p = null) {
   const memory = machine.memory;
   const minimumAddress = p?.EWminy ?? address(linked, "EWminy");
   const maximumAddress = p?.EWmaxy ?? address(linked, "EWmaxy");
-  const fractionBaseAddress = p?.PGfpartbase ?? address(linked, "PGfpartbase");
-  const integerBaseAddress = p?.PGipartbase ?? address(linked, "PGipartbase");
+  const fractionBase = p?.fpart ?? address(linked, "fpart");
+  const integerBase = p?.ipart ?? address(linked, "ipart");
   let row = memory[minimumAddress] | 0;
   const maximum = memory[maximumAddress] | 0;
-  const fractions = memory[fractionBaseAddress] >>> 0;
-  const integers = memory[integerBaseAddress] >>> 0;
+  const fractions = fractionBase;
+  const integers = integerBase;
   do {
     memory[fractions + row] = 5;
     memory[integers + row] = 311;
@@ -3712,7 +3696,7 @@ function groundTileShade(machine, linked) {
 
 function loadProjectedVertices(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const vertices = value(memory, linked, "PJnrv") | 0;
   for (let unit = 0; unit < vertices * 2; unit += 1) {
     memory[floats + 96 + unit] = memory[floats + 64 + unit];
@@ -3726,7 +3710,7 @@ function loadProjectedVertices(machine, linked) {
 
 function duplicateMappedInput(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   for (const source of [508, 516, 524]) {
     memory[floats + source + 2] = memory[floats + source];
     memory[floats + source + 3] = memory[floats + source + 1];
@@ -3735,12 +3719,12 @@ function duplicateMappedInput(machine, linked) {
 
 function duplicateMappedRotation(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   for (const source of [68, 76, 84]) {
     memory[floats + source + 2] = memory[floats + source];
     memory[floats + source + 3] = memory[floats + source + 1];
   }
-  const visibility = value(memory, linked, "PJrwfbase") >>> 0;
+  const visibility = address(linked, "rwf") >>> 0;
   const flag = memory[visibility + 2] | 0;
   memory[visibility + 3] = flag;
   const doFlag = address(linked, "PJdoflag");
@@ -3749,8 +3733,8 @@ function duplicateMappedRotation(machine, linked) {
 
 function projectMappedPolygon(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
-  const points = value(memory, linked, "PJmpbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
+  const points = address(linked, "mp") >>> 0;
   const control = floatingPoint(machine).control;
   const count = value(memory, linked, "PJvr2") >>> 0;
   const minX = address(linked, "PJminx");
@@ -3787,7 +3771,7 @@ function projectMappedPolygon(machine, linked) {
 
 function projectMappedPoint(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const factor = ((readFloat64(memory, floats + 50)) / (readFloat64(memory, floats + 80)));
   writeFloat64(memory, floats + 502, factor);
@@ -3806,7 +3790,7 @@ function projectMappedPoint(machine, linked) {
 function terrainFacingDot(machine, linked, p = null) {
   const memory = machine.memory;
   p ??= polymapAddresses(linked);
-  const floats = memory[p.PJfwbase] >>> 0;
+  const floats = p.fw;
   const view = dataView(memory);
   let difference = readFloat64View(view, floats + 448) - readFloat64View(view, floats + 508);
   writeFloat64View(view, p.FA0, difference);
@@ -3828,9 +3812,9 @@ function terrainFacingDot(machine, linked, p = null) {
 
 function polygonMidpoint(machine, linked, vertices) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
-  const factor = readFloat64(memory, address(linked, "PJthird0"));
+  const factor = readFloat64(memory, address(linked, "PGFt"));
   for (const [source, destination] of [[64, 408], [72, 410], [80, 412]]) {
     let sum = readFloat64(memory, floats + source);
     for (let vertex = 1; vertex < vertices; vertex += 1) {
@@ -3845,7 +3829,7 @@ function polygonMidpoint(machine, linked, vertices) {
 
 function transformMappedVertices(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const end = value(memory, linked, "PJdx") >>> 0;
   let vertex = value(memory, linked, "PJvr") >>> 0;
@@ -3873,7 +3857,7 @@ function transformMappedVertices(machine, linked) {
 
 function preparePolygonVectors(machine, linked, lastVertex) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   for (const [source, origin, firstEdge, secondEdge] of [
     [384, 470, 458, 464],
@@ -3893,7 +3877,7 @@ function preparePolygonVectors(machine, linked, lastVertex) {
 
 function scalePolygonBasis(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const scale = readFloat64(memory, floats + 484);
   for (const [source, destination] of [[6, 18], [8, 20], [10, 22]]) {
@@ -3905,7 +3889,7 @@ function scalePolygonBasis(machine, linked) {
 
 function doublePolygonBasis(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   for (const slot of [18, 20, 22]) {
     const input = readFloat64(memory, floats + slot);
@@ -3918,7 +3902,7 @@ function doublePolygonBasis(machine, linked) {
 function mappedFacing(machine, linked, p = null) {
   const memory = machine.memory;
   p ??= polymapAddresses(linked);
-  const floats = memory[p.PJfwbase] >>> 0;
+  const floats = p.fw;
   const control = floatingPoint(machine).control;
   const scratch = (number) => writeFloat64(memory, p.FA0, number);
   const narrow = (number) => {
@@ -4009,7 +3993,7 @@ function mappedFacing(machine, linked, p = null) {
 
 function polygonGradient(machine, linked, xi, yi, xo, yo, scale, destination) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const first = ((readFloat64(memory, floats + xi * 2)) * (readFloat64(memory, floats + yi * 2)));
   writeFloat64(memory, floats + 502, first);
@@ -4130,12 +4114,12 @@ function terrainTraceRowAligned(memory, p, qwords, base, row, ipart, control) {
 function terrainTraceRow(machine, linked, p = null) {
   const memory = machine.memory;
   p ??= polymapAddresses(linked);
-  const floats = memory[p.PJfwbase] >>> 0;
+  const floats = p.fw;
   const control = floatingPoint(machine).control;
   const nearest = (control & 0x0c00) === 0;
   const view = dataView(memory);
   const row = memory[p.SPi] | 0;
-  const ipart = memory[p.PJipartbase] >>> 0;
+  const ipart = p.ipart;
 
   // Ordinary Noctis rendering uses the nearest x87 mode and an aligned
   // qword workspace. Keep every source-visible wide spill and float32
@@ -4222,9 +4206,9 @@ function runTerrainEdgeRows(machine, linked, bndx, slope, row, count, p = null) 
   const memory = machine.memory;
   p ??= polymapAddresses(linked);
   const control = floatingPoint(machine).control;
-  const floats = memory[p.PGfwbase] >>> 0;
-  const fpart = memory[p.PGfpartbase] >>> 0;
-  const ipart = memory[p.PGipartbase] >>> 0;
+  const floats = p.fw;
+  const fpart = p.fpart;
+  const ipart = p.ipart;
   while (count !== 0) {
     let edge = convertToInt32(bndx, control);
     if (edge < -10000) edge = -10000;
@@ -4245,7 +4229,7 @@ function runTerrainEdgeRows(machine, linked, bndx, slope, row, count, p = null) 
 
 function terrainEdgeRows(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PGfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   runTerrainEdgeRows(
     machine,
     linked,
@@ -4260,7 +4244,7 @@ function polygonEdges(machine, linked, p = null) {
   const memory = machine.memory;
   p ??= polymapAddresses(linked);
   const control = floatingPoint(machine).control;
-  const floats = memory[p.PGfwbase] >>> 0;
+  const floats = p.fw;
   const points = p.mp;
   const vr22 = memory[p.EWvr22] >>> 0;
   memory[points + vr22] = memory[points];
@@ -4326,29 +4310,29 @@ function polygonEdges(machine, linked, p = null) {
 function terrainUvNext(machine, linked, p = null) {
   const memory = machine.memory;
   p ??= polymapAddresses(linked);
-  const floats = memory[p.PGfwbase] >>> 0;
+  const floats = p.fw;
   const control = floatingPoint(machine).control;
   const nearest = (control & 0x0c00) === 0;
   const view = dataView(memory);
   let z = readFloat64View(view, floats + p.FSZ * 2) + readFloat64View(view, floats + p.FSK3 * 2);
   writeFloat64View(view, floats + p.FSW0 * 2, z);
   let narrowed = nearest ? Math.fround(z) : roundFloat32(z, control);
-  memory[p.PGUVZ] = float32Bits(narrowed);
+  memory[p.FS0] = float32Bits(narrowed);
   writeFloat64View(view, floats + p.FSZ * 2, narrowed);
   let x = readFloat64View(view, floats + p.FSX * 2) + readFloat64View(view, floats + p.FSK1 * 2);
   writeFloat64View(view, floats + p.FSW1 * 2, x);
   narrowed = nearest ? Math.fround(x) : roundFloat32(x, control);
-  memory[p.PGUVX] = float32Bits(narrowed);
+  memory[p.FS0] = float32Bits(narrowed);
   writeFloat64View(view, floats + p.FSX * 2, narrowed);
   let y = readFloat64View(view, floats + p.FSY * 2) + readFloat64View(view, floats + p.FSK2 * 2);
   writeFloat64View(view, floats + p.FSW2 * 2, y);
   narrowed = nearest ? Math.fround(y) : roundFloat32(y, control);
-  memory[p.PGUVY] = float32Bits(narrowed);
+  memory[p.FS0] = float32Bits(narrowed);
   writeFloat64View(view, floats + p.FSY * 2, narrowed);
   let reciprocal = readFloat64View(view, floats + p.FSUNO * 2) / z;
   writeFloat64View(view, floats + p.FSW3 * 2, reciprocal);
   reciprocal = nearest ? Math.fround(reciprocal) : roundFloat32(reciprocal, control);
-  memory[p.PGUVK4] = float32Bits(reciprocal);
+  memory[p.FS0] = float32Bits(reciprocal);
   writeFloat64View(view, floats + p.FSK4 * 2, reciprocal);
   let result = x * readFloat64View(view, floats + p.FSTX * 2);
   writeFloat64View(view, floats + p.FSW3 * 2, result);
@@ -4572,7 +4556,7 @@ function mappedTerrainScanline(machine, p) {
   const culling = (memory[p.SPcull] & 1) !== 0;
   const blockSize = culling ? 32 : 16;
   const qwords = machine.noctisFloat64Memory ??= float64View(memory);
-  const base = (memory[p.PGfwbase] >>> 0) >>> 1;
+  const base = p.fw >>> 1;
   const texture = p.nw + p.RPBG + (memory[p.PGtexoff] | 0);
   const page = p.page;
   const tint = memory[p.SPtinta] | 0;
@@ -4591,23 +4575,22 @@ function mappedTerrainScanline(machine, p) {
     let z = qwords[base + p.FSZ] + qwords[base + p.FSK3];
     qwords[base + p.FSW0] = z;
     z = Math.fround(z);
-    memory[p.PGUVZ] = float32Bits(z);
+    memory[p.FS0] = float32Bits(z);
     qwords[base + p.FSZ] = z;
     let x = qwords[base + p.FSX] + qwords[base + p.FSK1];
     qwords[base + p.FSW1] = x;
     x = Math.fround(x);
-    memory[p.PGUVX] = float32Bits(x);
+    memory[p.FS0] = float32Bits(x);
     qwords[base + p.FSX] = x;
     let y = qwords[base + p.FSY] + qwords[base + p.FSK2];
     qwords[base + p.FSW2] = y;
     y = Math.fround(y);
-    memory[p.PGUVY] = float32Bits(y);
+    memory[p.FS0] = float32Bits(y);
     qwords[base + p.FSY] = y;
     let reciprocal = qwords[base + p.FSUNO] / z;
     qwords[base + p.FSW3] = reciprocal;
     reciprocal = Math.fround(reciprocal);
-    memory[p.PGUVK4] = float32Bits(reciprocal);
-    memory[p.FS0] = memory[p.PGUVK4];
+    memory[p.FS0] = float32Bits(reciprocal);
     qwords[base + p.FSK4] = reciprocal;
     let result = x * qwords[base + p.FSTX];
     qwords[base + p.FSW3] = result;
@@ -4667,7 +4650,7 @@ function mappedTerrainTraceAligned(machine, p, additive = false, publishUvFa = f
   const memory = machine.memory;
   const control = floatingPoint(machine).control;
   const qwords = machine.noctisFloat64Memory ??= float64View(memory);
-  const base = (memory[p.PGfwbase] >>> 0) >>> 1;
+  const base = p.fw >>> 1;
   const fa = p.FA0 >>> 1;
   const ipart = p.ipart;
   const fpart = p.fpart;
@@ -4679,10 +4662,6 @@ function mappedTerrainTraceAligned(machine, p, additive = false, publishUvFa = f
 
   mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, tint);
   mappedPageStore(memory, p, (p.PGSCRE + p.PGDOFF) & 0xffff, memory[p.SPescr]);
-  memory[p.PJfwbase] = p.fw;
-  memory[p.PJipartbase] = ipart;
-  memory[p.PGfwbase] = p.fw;
-  memory[p.PGnwbase] = p.nw;
 
   let spsec = memory[p.SPsec] | 0;
   let spdi = memory[p.SPdi] & 0xffff;
@@ -4697,10 +4676,6 @@ function mappedTerrainTraceAligned(machine, p, additive = false, publishUvFa = f
   let spdx = memory[p.SPdx] | 0;
   let spsave = memory[p.SPsave] | 0;
   let fs0 = memory[p.FS0] | 0;
-  let pguvz = memory[p.PGUVZ] | 0;
-  let pguvx = memory[p.PGUVX] | 0;
-  let pguvy = memory[p.PGUVY] | 0;
-  let pguvk4 = memory[p.PGUVK4] | 0;
   let finalFa = qwords[fa];
 
   let row = memory[p.BXminy] | 0;
@@ -4768,23 +4743,22 @@ function mappedTerrainTraceAligned(machine, p, additive = false, publishUvFa = f
       z = qwords[base + p.FSZ] + qwords[base + p.FSK3];
       qwords[base + p.FSW0] = z;
       z = Math.fround(z);
-      pguvz = float32Bits(z);
+      fs0 = float32Bits(z);
       qwords[base + p.FSZ] = z;
       x = qwords[base + p.FSX] + qwords[base + p.FSK1];
       qwords[base + p.FSW1] = x;
       x = Math.fround(x);
-      pguvx = float32Bits(x);
+      fs0 = float32Bits(x);
       qwords[base + p.FSX] = x;
       y = qwords[base + p.FSY] + qwords[base + p.FSK2];
       qwords[base + p.FSW2] = y;
       y = Math.fround(y);
-      pguvy = float32Bits(y);
+      fs0 = float32Bits(y);
       qwords[base + p.FSY] = y;
       reciprocal = qwords[base + p.FSUNO] / z;
       qwords[base + p.FSW3] = reciprocal;
       reciprocal = Math.fround(reciprocal);
-      pguvk4 = float32Bits(reciprocal);
-      fs0 = pguvk4;
+      fs0 = float32Bits(reciprocal);
       qwords[base + p.FSK4] = reciprocal;
       result = x * qwords[base + p.FSTX];
       qwords[base + p.FSW3] = result;
@@ -4898,10 +4872,6 @@ function mappedTerrainTraceAligned(machine, p, additive = false, publishUvFa = f
   memory[p.SPdx] = spdx;
   memory[p.SPsave] = spsave;
   memory[p.FS0] = fs0;
-  memory[p.PGUVZ] = pguvz;
-  memory[p.PGUVX] = pguvx;
-  memory[p.PGUVY] = pguvy;
-  memory[p.PGUVK4] = pguvk4;
 }
 
 function mappedScanline(machine, linked, p) {
@@ -4973,7 +4943,7 @@ function mappedTrace(machine, linked, p) {
   if ((memory[p.SPterrain] | 0) !== 0
       && (memory[p.SPhalf] & 1) === 0
       && (floatingPoint(machine).control & 0x0c00) === 0
-      && ((memory[p.PGfwbase] | 0) & 1) === 0
+      && ((p.fw | 0) & 1) === 0
       && (p.FA0 & 1) === 0) {
     mappedTerrainTraceAligned(machine, p);
     return;
@@ -4984,23 +4954,19 @@ function mappedTrace(machine, linked, p) {
       && (memory[p.SPcull] & 1) === 0
       && (memory[p.SPhalf] & 1) === 0
       && (floatingPoint(machine).control & 0x0c00) === 0
-      && ((memory[p.PGfwbase] | 0) & 1) === 0
+      && ((p.fw | 0) & 1) === 0
       && (p.FA0 & 1) === 0) {
     mappedTerrainTraceAligned(machine, p, (memory[p.SPflar] & 1) !== 0, true);
     return;
   }
   mappedPageStore(memory, p, (p.PGSCRT + p.PGDOFF) & 0xffff, memory[p.SPtinta]);
   mappedPageStore(memory, p, (p.PGSCRE + p.PGDOFF) & 0xffff, memory[p.SPescr]);
-  memory[p.PJfwbase] = p.fw;
-  memory[p.PJipartbase] = p.ipart;
-  memory[p.PGfwbase] = p.fw;
-  memory[p.PGnwbase] = p.nw;
   let row = memory[p.BXminy] | 0;
   const maximum = memory[p.BXmaxy] | 0;
   const fastHalfScan = (memory[p.SPterrain] | memory[p.SPpixfast]) !== 0;
   const fastTerrainScanline = (memory[p.SPterrain] | 0) !== 0
     && (floatingPoint(machine).control & 0x0c00) === 0
-    && ((memory[p.PGfwbase] | 0) & 1) === 0;
+    && ((p.fw | 0) & 1) === 0;
   memory[p.SPi] = row;
   while (row <= maximum) {
     terrainTraceRow(machine, linked, p);
@@ -5838,7 +5804,7 @@ function landedEyeHeight(machine, linked) {
 
 function landedDenseAverage(machine, linked) {
   const memory = machine.memory;
-  const base = value(memory, linked, "VHGNDdensebase") >>> 0;
+  const base = address(linked, "nw") + address(linked, "RADPT") + 2880;
   const index = value(memory, linked, "SUsi") | 0;
   let total = 0;
   for (const row of [-320, 0, 320, 640]) {
@@ -5961,7 +5927,7 @@ function landedMushroomPixels(machine, linked, direct = null) {
 
 function landedMushroomPoint(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const mask = value(memory, linked, "VHGNDmushscale");
   for (const [source, destination, slot] of [
@@ -6279,7 +6245,7 @@ function landedTreeDirection(machine, linked) {
 
 function landedTreeVertex(machine, linked, leaf) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "PJfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const index = value(memory, linked, "VHGNDvi") >>> 0;
   const range = readNamedFloat32(memory, linked, leaf ? "VHGNDtreerangef" : "VHGNDtreerad");
@@ -6386,7 +6352,7 @@ function landedTerrainAddresses(linked) {
     "VHGNDreflected", "VHGNDtscale",
     "VHGNDdepth", "VHGNDshade", "VHGNDh1", "VHGNDs1", "VHGNDs2", "VHGNDs3", "VHGNDs4",
     "GRiptype", "VHGNDsctype", "VHGNDruined", "VHGNDruindrawn", "VHGNDruins", "SPtinta", "DBcol", "SPescr", "DBflar", "DBent",
-    "SPcull", "VHGNDtilepolys", "PJfwbase", "fw", "VHGNDvctri", "FCret", "PGtexf", "RPSM",
+    "SPcull", "VHGNDtilepolys", "fw", "VHGNDvctri", "FCret", "PGtexf", "RPSM",
     "VHGNDnormindex", "VHGNDnormgen", "VHGNDnormstamp", "VHGNDnormx", "VHGNDnormy", "VHGNDnormz",
     "VHGNDvcgen", "VHGNDvcindex", "VHGNDvcstamp", "VHGNDvcvisible",
     "VHGNDvcrx0", "VHGNDvcrx1", "VHGNDvcry0", "VHGNDvcry1",
@@ -6460,7 +6426,7 @@ function denseAtmosphere(machine, linked) {
   const memory = machine.memory;
   let p = denseAtmosphereAddressCaches.get(linked);
   if (!p) {
-    const names = ["nw", "RADPT", "SUsp", "SUsi", "VHGNDdensebase"];
+    const names = ["nw", "RADPT", "SUsp", "SUsi"];
     p = Object.fromEntries(names.map((name) => [name, address(linked, name)]));
     denseAtmosphereAddressCaches.set(linked, p);
   }
@@ -6472,7 +6438,6 @@ function denseAtmosphere(machine, linked) {
     memory[base + index] = lastMasked;
   }
   memory[p.SUsp] = base;
-  memory[p.VHGNDdensebase] = base;
 
   for (let index = 320; index < 57280; index += 1) {
     const pointer = base + index;
@@ -6737,7 +6702,7 @@ function landedEyeHeightAt(machine, linked, p, worldX, worldZ) {
 function loadTriangleCoordinates(machine, p,
   x0, y0, z0, x1, y1, z1, x2, y2, z2, duplicateApex = false) {
   const memory = machine.memory;
-  const floats = memory[p.PJfwbase] >>> 0;
+  const floats = p.fw;
   const view = dataView(memory);
   writeFloat64View(view, floats + 504, x0); writeFloat64View(view, floats + 506, x1); writeFloat64View(view, floats + 508, x2);
   writeFloat64View(view, floats + 512, y0); writeFloat64View(view, floats + 514, y1); writeFloat64View(view, floats + 516, y2);
@@ -7777,7 +7742,7 @@ function renderGreenmushDirect(machine, linked, tree, sharedProjection = null) {
     if (floating) {
       const control = floatingPoint(machine).control;
       const view = machine.noctisDataView ??= dataView(memory);
-      const floats = memory[tree.p.PJfwbase] >>> 0;
+      const floats = tree.p.fw;
       const sources = [state[11], state[10], state[9]];
       const destinations = [tree.mushpzf, tree.mushpyf, tree.mushpxf];
       const slots = [520, 512, 504];
@@ -8407,7 +8372,6 @@ function terrainTileMirror(machine, linked) {
   memory[p.DBent] = 0;
   memory[p.SPcull] = 0;
   memory[p.VHGNDtilepolys] = 0;
-  memory[p.PJfwbase] = p.fw;
 
   for (let triangle = 0; triangle < 2; triangle += 1) {
     memory[p.VHGNDvctri] = triangle;
@@ -12051,7 +12015,7 @@ function terrainFacingPairDirect(machine, ground) {
   const vertexY = -(memory[ground.VHGNDs4] << 11);
   const vertexZ = z1;
   const qwords = machine.noctisFloat64Memory ??= float64View(memory);
-  const base = (memory[ground.PJfwbase] >>> 0) >>> 1;
+  const base = ground.fw >>> 1;
   const cameraX = qwords[base + 224];
   const cameraY = qwords[base + 225];
   const cameraZ = qwords[base + 226];
@@ -12279,7 +12243,6 @@ function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
   const sctype = memory[p.VHGNDsctype] | 0;
   memory[p.SPcull] = sctype === 3 ? (depth < 4 ? 1 : 0) : (depth >= 4 ? 1 : 0);
   memory[p.VHGNDtilepolys] = 0;
-  memory[p.PJfwbase] = p.fw;
 
   const facingMask = terrainFacingPairDirect(machine, p);
   const facing0 = (facingMask & 1) !== 0;
@@ -12305,7 +12268,7 @@ function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
 function landedTerrainTriangle(machine, linked) {
   const memory = machine.memory;
   const p = landedTerrainAddresses(linked);
-  const floats = memory[p.PJfwbase] >>> 0;
+  const floats = p.fw;
   const view = dataView(memory);
   const x0 = memory[p.VHGNDx] << 14;
   const z0 = memory[p.VHGNDz] << 14;
@@ -12339,10 +12302,9 @@ function landedVertexLoad(machine, linked) {
   // VHGND vload's source prologue copies the caller-owned world coordinate
   // into FI and restores the fixed polygon workspace before its native body.
   // The earlier service replacement skipped both statements, so every caller
-  // could project a stale conversion result through a stale PJfwbase.
+  // could project a stale conversion result through the polygon workspace.
   const input = memory[p.VHGNDvv] | 0;
   memory[p.FI] = input;
-  memory[p.PJfwbase] = p.fw;
   writeFloat64(memory, p.FA0, input);
   const floats = p.fw;
   const slot = (memory[p.VHGNDvslot] + memory[p.VHGNDvi]) | 0;
@@ -12647,7 +12609,7 @@ function terrainFacing(machine, linked) {
     mappedFacing(machine, linked);
     return;
   }
-  const floats = memory[p.PJfwbase] >>> 0;
+  const floats = p.fw;
   const view = dataView(memory);
   const index = Math.imul(memory[p.VHGNDh1] | 0, 2) + (memory[p.VHGNDvctri] | 0);
   memory[p.VHGNDnormindex] = index;
@@ -13430,7 +13392,7 @@ function narrowScalar(machine, linked, number) {
 function spaceRelativeCoordinates(machine, linked) {
   const memory = machine.memory;
   const star = value(memory, linked, "VHSstarptr") >>> 0;
-  const floats = value(memory, linked, "VHSfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const axes = [
     [0, "VHSdx0", 504],
@@ -13456,7 +13418,7 @@ function spaceRelativeCoordinates(machine, linked) {
 
 function spaceRotateDepth(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "VHSfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const x = readFloat64(memory, floats + 504);
   const y = readFloat64(memory, floats + 512);
@@ -13539,7 +13501,7 @@ function spaceRotateDepth(machine, linked) {
 
 function spaceProject(machine, linked) {
   const memory = machine.memory;
-  const floats = value(memory, linked, "VHSfwbase") >>> 0;
+  const floats = address(linked, "fw") >>> 0;
   const control = floatingPoint(machine).control;
   const factor = scalarBinaryNumber(
     readFloat64(memory, floats + 50),
@@ -13567,7 +13529,7 @@ function starField(machine, linked) {
       "VHSstar", "VHScount", "VHSstarptr", "VHSdepth", "VHSamp", "VHScolour",
       "GCx", "GCy", "VHSscreeny", "VHSdrawcount", "VHSdrawptr", "VHSsurface",
       "SPoff", "SPreg", "SPval", "RGADP", "vhsstarcache", "vhsscreencache", "SADPT",
-      "VHSdrawready", "VHSfwbase", "VHSdx0", "VHSdy0", "VHSdz0",
+      "VHSdrawready", "fw", "VHSdx0", "VHSdy0", "VHSdz0",
     ];
     p = Object.fromEntries(names.map((name) => [name, address(linked, name)]));
     p.page = noctisBuffer(linked, "SADPT");
@@ -13579,7 +13541,7 @@ function starField(machine, linked) {
   const surface = (memory[p.VHSsurface] | 0) !== 0;
   const control = floatingPoint(machine).control;
   const fastNumbers = (control & 0x0f00) === 0x0300;
-  const floats = memory[p.VHSfwbase] >>> 0;
+  const floats = p.fw;
   const cameraX = readFloat64(memory, p.VHSdx0);
   const cameraY = readFloat64(memory, p.VHSdy0);
   const cameraZ = readFloat64(memory, p.VHSdz0);
