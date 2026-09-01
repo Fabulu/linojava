@@ -15,7 +15,9 @@ function fixture() {
     "VHGUIrow2p", "VHGUIgap", "VHGUIdw", "VHGUIdh", "VHGUIsy",
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
     "VHTcyclebase", "nw",
-    "RADPT", "VHGNDmushinner", "VHGNDmushcolmask", "VHGNDmushbase",
+    "RADPT", "VHGNDblurpasses", "VHGNDblursize", "VHGNDblurp",
+    "VHGNDblurcount", "VHGNDblurval", "VHGNDmushinner",
+    "VHGNDmushcolmask", "VHGNDmushbase",
     "VHGNDmushoff",
     "VHTsmoothbase", "SPcpfrom", "SPcpto", "PVj", "SCcx", "SCdi",
     "SCal", "SCzf", "DBal", "CSbyte", "SGpi", "SGpf", "SGgx", "SGgy",
@@ -94,6 +96,47 @@ function fixture() {
     at(name) { return symbols.get(canonicalName(name)).value; },
   };
 }
+
+test("surface blur service preserves the shared Lino loop", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  linked.symbols.get(canonicalName("nw")).value = 100_000;
+  linked.symbols.get(canonicalName("RADPT")).value = 20_000;
+  const base = 122_556;
+  const count = 321;
+  const expected = new Int32Array(1_000);
+  for (let index = 0; index < expected.length; index += 1) {
+    expected[index] = (index * 37 + 11) & 0xff;
+  }
+  memory.set(expected, base);
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let index = 0; index < count; index += 1) {
+      const first = expected[index + 320];
+      expected[index] = (first & 0xc0) | (((first & 0x3f)
+        + (expected[index + 321] & 0x3f)
+        + (expected[index + 640] & 0x3f)
+        + (expected[index + 641] & 0x3f)) >>> 2);
+    }
+  }
+  memory[at("VHGNDblurpasses")] = 2;
+  memory[at("VHGNDblursize")] = count;
+
+  intrinsic[SERVICES.groundSurfaceBlur](machine, linked);
+
+  assert.deepEqual(
+    [...memory.subarray(base, base + count)],
+    [...expected.subarray(0, count)],
+  );
+  assert.equal(memory[at("VHGNDblurp")], base + count);
+  assert.equal(memory[at("VHGNDblurcount")], 0);
+  assert.equal(memory[at("VHGNDblurpasses")], 0);
+  assert.equal(memory[at("VHGNDblurval")], expected[count - 1 + 320]);
+  assert.equal(machine.A, 0);
+  assert.equal(machine.C, expected[count - 1 + 320] & 0xc0);
+  assert.equal(machine.D, base + count - 1);
+  assert.equal(machine.E, base + count - 1 + 320);
+});
 
 test("Noctis integer and framebuffer intrinsics preserve the native kernels", () => {
   const intrinsic = createNoctisIntrinsics();
