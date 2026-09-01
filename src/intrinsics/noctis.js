@@ -237,29 +237,6 @@ const SERVICE_IDS = Object.freeze({
   uafCopyCommon: "service:uafcopycommon",
   xMul32u: "service:xmul32u",
   xRootCore: "service:xrootcore",
-  xCopyXtoY: "service:xcopyxtoy",
-  xSaveR: "service:xsaver",
-  xLoadR: "service:xloadr",
-  xCopyRtoY: "service:xcopyrtoy",
-  xSaveZ: "service:xsavez",
-  xLoadZ: "service:xloadz",
-  xSaveU: "service:xsaveu",
-  xLoadU: "service:xloadu",
-  xCopyUtoY: "service:xcopyutoy",
-  xSaveP: "service:xsavep",
-  xLoadP: "service:xloadp",
-  xCopyPtoY: "service:xcopyptoy",
-  xSaveB: "service:xsaveb",
-  xCopyBtoY: "service:xcopybtoy",
-  xSaveA: "service:xsavea",
-  xLoadA: "service:xloada",
-  xCopyAtoY: "service:xcopyatoy",
-  xSaveD: "service:xsaved",
-  xLoadD: "service:xloadd",
-  xCopyDtoY: "service:xcopydtoy",
-  xStoreTabX: "service:xstoretabx",
-  xLoadTabX: "service:xloadtabx",
-  xLoadTabY: "service:xloadtaby",
   compareFloat64: "service:fcmp",
   spaceClear: "service:vhgspaceclear",
   interiorSmooth64: "service:vhginteriorsmooth64",
@@ -1826,113 +1803,6 @@ function xRootCoreInline(linked) {
     A=xrExponent;B=xrB;C=xrC;D=xrD;E=xrE;X=${LINO_DONE};
   }`;
 }
-
-const FP_FIXED_STATE_TRANSFERS = [
-  { id: SERVICE_IDS.xCopyXtoY, source: ["XS", "XE", "XMH", "XML"], destination: ["YS", "YE", "YMH", "YML"] },
-  { id: SERVICE_IDS.xSaveR, source: ["XS", "XE", "XMH", "XML"], destination: ["TRS", "TRE", "TRMH", "TRML"] },
-  { id: SERVICE_IDS.xLoadR, source: ["TRS", "TRE", "TRMH", "TRML"], destination: ["XS", "XE", "XMH", "XML"] },
-  { id: SERVICE_IDS.xCopyRtoY, source: ["TRS", "TRE", "TRMH", "TRML"], destination: ["YS", "YE", "YMH", "YML"] },
-  { id: SERVICE_IDS.xSaveZ, source: ["XS", "XE", "XMH", "XML"], destination: ["TZS", "TZE", "TZMH", "TZML"] },
-  { id: SERVICE_IDS.xLoadZ, source: ["TZS", "TZE", "TZMH", "TZML"], destination: ["XS", "XE", "XMH", "XML"] },
-  { id: SERVICE_IDS.xSaveU, source: ["XS", "XE", "XMH", "XML"], destination: ["TUS", "TUE", "TUMH", "TUML"] },
-  { id: SERVICE_IDS.xLoadU, source: ["TUS", "TUE", "TUMH", "TUML"], destination: ["XS", "XE", "XMH", "XML"] },
-  { id: SERVICE_IDS.xCopyUtoY, source: ["TUS", "TUE", "TUMH", "TUML"], destination: ["YS", "YE", "YMH", "YML"] },
-  { id: SERVICE_IDS.xSaveP, source: ["XS", "XE", "XMH", "XML"], destination: ["TPS", "TPE", "TPMH", "TPML"] },
-  { id: SERVICE_IDS.xLoadP, source: ["TPS", "TPE", "TPMH", "TPML"], destination: ["XS", "XE", "XMH", "XML"] },
-  { id: SERVICE_IDS.xCopyPtoY, source: ["TPS", "TPE", "TPMH", "TPML"], destination: ["YS", "YE", "YMH", "YML"] },
-  { id: SERVICE_IDS.xSaveB, source: ["XS", "XE", "XMH", "XML"], destination: ["TBS", "TBE", "TBMH", "TBML"] },
-  { id: SERVICE_IDS.xCopyBtoY, source: ["TBS", "TBE", "TBMH", "TBML"], destination: ["YS", "YE", "YMH", "YML"] },
-  { id: SERVICE_IDS.xSaveA, source: ["XS", "XE", "XMH", "XML"], destination: ["TAS", "TAE", "TAMH", "TAML"] },
-  { id: SERVICE_IDS.xLoadA, source: ["TAS", "TAE", "TAMH", "TAML"], destination: ["XS", "XE", "XMH", "XML"] },
-  { id: SERVICE_IDS.xCopyAtoY, source: ["TAS", "TAE", "TAMH", "TAML"], destination: ["YS", "YE", "YMH", "YML"] },
-  { id: SERVICE_IDS.xSaveD, source: ["XS", "XE", "XMH", "XML"], destination: ["TDS", "TDE", "TDMH", "TDML"] },
-  { id: SERVICE_IDS.xLoadD, source: ["TDS", "TDE", "TDMH", "TDML"], destination: ["XS", "XE", "XMH", "XML"] },
-  { id: SERVICE_IDS.xCopyDtoY, source: ["TDS", "TDE", "TDMH", "TDML"], destination: ["YS", "YE", "YMH", "YML"] },
-];
-
-const FP_TABLE_STATE_TRANSFERS = [
-  { id: SERVICE_IDS.xStoreTabX, image: ["XS", "XE", "XMH", "XML"], store: true },
-  { id: SERVICE_IDS.xLoadTabX, image: ["XS", "XE", "XMH", "XML"], store: false },
-  { id: SERVICE_IDS.xLoadTabY, image: ["YS", "YE", "YMH", "YML"], store: false },
-];
-
-function createFixedStateTransfer({ source, destination }) {
-  const caches = new WeakMap();
-  const addresses = (linked) => {
-    let cached = caches.get(linked);
-    if (cached) return cached;
-    cached = {
-      source: source.map((name) => address(linked, name)),
-      destination: destination.map((name) => address(linked, name)),
-    };
-    caches.set(linked, cached);
-    return cached;
-  };
-  const service = (machine, linked) => {
-    const memory = machine.memory;
-    const p = addresses(linked);
-    for (let index = 0; index < 4; index += 1) {
-      memory[p.destination[index]] = memory[p.source[index]];
-    }
-    machine.X = LINO_DONE;
-  };
-  service.inline = (linked) => {
-    const p = addresses(linked);
-    const copies = p.destination.map((destinationAddress, index) => (
-      `m[${destinationAddress}]=m[${p.source[index]}];`
-    )).join("");
-    return `{${copies}X=${LINO_DONE};}`;
-  };
-  return service;
-}
-
-function createTableStateTransfer({ image, store }) {
-  const caches = new WeakMap();
-  const addresses = (linked) => {
-    let cached = caches.get(linked);
-    if (cached) return cached;
-    cached = {
-      table: address(linked, "xttable"),
-      index: address(linked, "xtindex"),
-      image: image.map((name) => address(linked, name)),
-    };
-    caches.set(linked, cached);
-    return cached;
-  };
-  const service = (machine, linked) => {
-    const memory = machine.memory;
-    const p = addresses(linked);
-    const offset = Math.imul(memory[p.index], 4) | 0;
-    const pointer = (memory[p.table] + offset) | 0;
-    machine.A = offset;
-    machine.E = pointer;
-    for (let index = 0; index < 4; index += 1) {
-      const tableAddress = (pointer + index) | 0;
-      if (store) memory[tableAddress] = memory[p.image[index]];
-      else memory[p.image[index]] = memory[tableAddress];
-    }
-    machine.X = LINO_DONE;
-  };
-  service.inline = (linked) => {
-    const p = addresses(linked);
-    const copies = p.image.map((imageAddress, index) => {
-      const tableAddress = `((xstPointer+${index})|0)`;
-      return store
-        ? `m[${tableAddress}]=m[${imageAddress}];`
-        : `m[${imageAddress}]=m[${tableAddress}];`;
-    }).join("");
-    return `{
-      const xstOffset=Math.imul(m[${p.index}]|0,4)|0,xstPointer=(m[${p.table}]+xstOffset)|0;
-      A=xstOffset;E=xstPointer;${copies}X=${LINO_DONE};
-    }`;
-  };
-  return service;
-}
-
-const FP_STATE_TRANSFER_SERVICES = Object.fromEntries([
-  ...FP_FIXED_STATE_TRANSFERS.map((spec) => [spec.id, createFixedStateTransfer(spec)]),
-  ...FP_TABLE_STATE_TRANSFERS.map((spec) => [spec.id, createTableStateTransfer(spec)]),
-]);
 
 function multiplyUnsigned(machine) {
   const product = BigInt(machine.A >>> 0) * BigInt(machine.B >>> 0);
@@ -14188,7 +14058,6 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.uafCopyCommon]: uafCopyCommon,
     [SERVICE_IDS.xMul32u]: xMul32u,
     [SERVICE_IDS.xRootCore]: xRootCore,
-    ...FP_STATE_TRANSFER_SERVICES,
     [SERVICE_IDS.compareFloat64]: compareFloat64Service,
     [SERVICE_IDS.spaceClear]: spaceClear,
     [SERVICE_IDS.interiorSmooth64]: interiorSmooth64,

@@ -40,12 +40,7 @@ function fixture() {
     "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
     "xua", "xub", "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1",
     "xup2", "xup3", "xutmp", "xumid", "xulo", "xuhi",
-    "XS", "XE", "XMH", "XML", "YS", "YE", "YMH", "YML",
-    "TRS", "TRE", "TRMH", "TRML", "TZS", "TZE", "TZMH", "TZML",
-    "TUS", "TUE", "TUMH", "TUML", "TPS", "TPE", "TPMH", "TPML",
-    "TBS", "TBE", "TBMH", "TBML", "TAS", "TAE", "TAMH", "TAML",
-    "TDS", "TDE", "TDMH", "TDML", "xttable", "xtindex",
-    "xtmp", "srd0", "srd1", "srd2", "srd3",
+    "XS", "XE", "XMH", "XML", "xtmp", "srd0", "srd1", "srd2", "srd3",
     "sqrh", "sqrl", "sqmh", "sqml", "sqcarry", "sqstep",
     "srm0", "srm1", "srm2", "srm3",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
@@ -318,120 +313,6 @@ test("restoring-root service preserves exact shared Lino integer state", () => {
   assert.equal(machine.halted, false);
   assert.equal(memory[canary], 0x13579bdf);
   assert.equal(memory[canary + 1], -0x2468ace);
-});
-
-test("floating-point state-transfer services preserve exact leaf state", () => {
-  const intrinsic = createNoctisIntrinsics();
-  const { linked, machine, at } = fixture();
-  const memory = machine.memory;
-  const images = {
-    X: ["XS", "XE", "XMH", "XML"],
-    Y: ["YS", "YE", "YMH", "YML"],
-    R: ["TRS", "TRE", "TRMH", "TRML"],
-    Z: ["TZS", "TZE", "TZMH", "TZML"],
-    U: ["TUS", "TUE", "TUMH", "TUML"],
-    P: ["TPS", "TPE", "TPMH", "TPML"],
-    B: ["TBS", "TBE", "TBMH", "TBML"],
-    A: ["TAS", "TAE", "TAMH", "TAML"],
-    D: ["TDS", "TDE", "TDMH", "TDML"],
-  };
-  const fixed = [
-    [SERVICES.xCopyXtoY, images.X, images.Y],
-    [SERVICES.xSaveR, images.X, images.R],
-    [SERVICES.xLoadR, images.R, images.X],
-    [SERVICES.xCopyRtoY, images.R, images.Y],
-    [SERVICES.xSaveZ, images.X, images.Z],
-    [SERVICES.xLoadZ, images.Z, images.X],
-    [SERVICES.xSaveU, images.X, images.U],
-    [SERVICES.xLoadU, images.U, images.X],
-    [SERVICES.xCopyUtoY, images.U, images.Y],
-    [SERVICES.xSaveP, images.X, images.P],
-    [SERVICES.xLoadP, images.P, images.X],
-    [SERVICES.xCopyPtoY, images.P, images.Y],
-    [SERVICES.xSaveB, images.X, images.B],
-    [SERVICES.xCopyBtoY, images.B, images.Y],
-    [SERVICES.xSaveA, images.X, images.A],
-    [SERVICES.xLoadA, images.A, images.X],
-    [SERVICES.xCopyAtoY, images.A, images.Y],
-    [SERVICES.xSaveD, images.X, images.D],
-    [SERVICES.xLoadD, images.D, images.X],
-    [SERVICES.xCopyDtoY, images.D, images.Y],
-  ];
-  const imageNames = Object.values(images).flat();
-  const canary = 1_900_000;
-
-  const initialize = () => {
-    for (let index = 0; index < imageNames.length; index += 1) {
-      memory[at(imageNames[index])] = Math.imul(index + 1, 0x13579bdf) | 0;
-    }
-    memory[at("xttable")] = 0x12345678;
-    memory[at("xtindex")] = -0x1234567;
-    memory[canary] = 0x2468ace;
-    memory[canary + 1] = -0x13579bdf;
-    [machine.A, machine.B, machine.C, machine.D, machine.E] = [11, 13, 17, 19, 23];
-    machine.X = 0x6661696c;
-    machine.stack = Int32Array.from([29, 31, 37, 41]);
-    machine.depth = 3;
-    machine.halted = false;
-  };
-
-  for (const [service, source, destination] of fixed) {
-    initialize();
-    const initial = new Map(imageNames.map((name) => [name, memory[at(name)]]));
-    intrinsic[service](machine, linked);
-    for (let index = 0; index < 4; index += 1) {
-      assert.equal(memory[at(destination[index])], initial.get(source[index]));
-    }
-    for (const name of imageNames) {
-      if (!destination.includes(name)) assert.equal(memory[at(name)], initial.get(name));
-    }
-    assert.deepEqual([machine.A, machine.B, machine.C, machine.D, machine.E], [11, 13, 17, 19, 23]);
-    assert.equal(machine.X, 0x646f6e65);
-    assert.deepEqual([...machine.stack], [29, 31, 37, 41]);
-    assert.equal(machine.depth, 3);
-    assert.equal(machine.halted, false);
-    assert.equal(memory[at("xttable")], 0x12345678);
-    assert.equal(memory[at("xtindex")], -0x1234567);
-    assert.equal(memory[canary], 0x2468ace);
-    assert.equal(memory[canary + 1], -0x13579bdf);
-  }
-
-  const tableCases = [
-    [SERVICES.xStoreTabX, images.X, true, 1_800_000],
-    [SERVICES.xLoadTabX, images.X, false, 1_800_100],
-    [SERVICES.xLoadTabY, images.Y, false, 1_800_200],
-    [SERVICES.xStoreTabX, images.X, true, at("XE")],
-    [SERVICES.xLoadTabX, images.X, false, at("XS") - 1],
-    [SERVICES.xLoadTabY, images.Y, false, at("YS") - 1],
-  ];
-  for (const [service, image, store, pointer] of tableCases) {
-    initialize();
-    memory[at("xttable")] = pointer;
-    memory[at("xtindex")] = 0;
-    for (let index = 0; index < 4; index += 1) {
-      if (pointer >= 1_800_000) memory[pointer + index] = Math.imul(index + 9, 0x1020304) | 0;
-    }
-    const relevant = new Set([
-      ...imageNames.map(at), at("xttable"), at("xtindex"),
-      pointer, pointer + 1, pointer + 2, pointer + 3, canary, canary + 1,
-    ]);
-    const expected = new Map([...relevant].map((location) => [location, memory[location]]));
-    const imageAddresses = image.map(at);
-    for (let index = 0; index < 4; index += 1) {
-      const source = store ? imageAddresses[index] : pointer + index;
-      const destination = store ? pointer + index : imageAddresses[index];
-      expected.set(destination, expected.get(source));
-    }
-
-    intrinsic[service](machine, linked);
-
-    for (const [location, value] of expected) assert.equal(memory[location], value);
-    assert.deepEqual([machine.A, machine.B, machine.C, machine.D, machine.E], [0, 13, 17, 19, pointer]);
-    assert.equal(machine.X, 0x646f6e65);
-    assert.deepEqual([...machine.stack], [29, 31, 37, 41]);
-    assert.equal(machine.depth, 3);
-    assert.equal(machine.halted, false);
-  }
 });
 
 test("surface blur service preserves the shared Lino loop", () => {
