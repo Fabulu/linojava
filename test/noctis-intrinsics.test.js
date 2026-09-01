@@ -17,7 +17,9 @@ function fixture() {
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
     "VHTmaski", "VHTcyclebase", "nw",
     "RADPT", "VHGNDblurpasses", "VHGNDblursize", "VHGNDblurp",
-    "VHGNDblurcount", "VHGNDblurval", "VHGNDskycache", "VHGNDbgcachep",
+    "VHGNDblurcount", "VHGNDblurval", "VHGNDsmoothcx", "VHGNDsmoothcy",
+    "VHGNDsmoothx", "VHGNDsmoothy", "VHGNDsmoothpx", "VHGNDsmoothpy",
+    "VHGNDsmoothsum", "VHGNDsmoothavg", "VHGNDsmoothptr", "VHGNDskycache", "VHGNDbgcachep",
     "VHGNDbgcacheq", "VHGNDmushinner",
     "VHGNDmushcolmask", "VHGNDmushbase",
     "VHGNDmushoff",
@@ -229,6 +231,101 @@ test("surface blur service preserves the shared Lino loop", () => {
   assert.equal(machine.C, expected[count - 1 + 320] & 0xc0);
   assert.equal(machine.D, base + count - 1);
   assert.equal(machine.E, base + count - 1 + 320);
+});
+
+test("HUD lamp smoother service preserves exact in-place shared Lino state", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  linked.symbols.get(canonicalName("nw")).value = 100_000;
+  linked.symbols.get(canonicalName("RADPT")).value = 20_000;
+  const base = 120_000;
+  const size = 64_000;
+  const cases = [
+    { cx: 9, cy: 9, pattern: 0 },
+    { cx: 308, cy: 9, pattern: 1 },
+    { cx: 9, cy: 188, pattern: 2 },
+    { cx: 308, cy: 188, pattern: 3 },
+  ];
+
+  const smoothReference = (page, cx, cy) => {
+    let average = 0;
+    let pointer = 0;
+    for (let py = -5; py <= 5; py += 1) {
+      for (let px = -5; px <= 5; px += 1) {
+        if (px * px + py * py >= 25) continue;
+        pointer = (cy + py) * 320 + cx + px;
+        average = ((page[pointer] & 63)
+          + (page[pointer + 1] & 63)
+          + (page[pointer + 320] & 63)
+          + (page[pointer + 321] & 63)) >>> 2;
+        page[pointer] = (page[pointer] & 192) + average;
+        page[pointer + 1] = (page[pointer + 1] & 192) + average;
+        page[pointer + 320] = (page[pointer + 320] & 192) + average;
+        page[pointer + 321] = (page[pointer + 321] & 192) + average;
+      }
+    }
+    return { average, pointer };
+  };
+
+  let random = 0x6d2b79f5;
+  for (const { cx, cy, pattern } of cases) {
+    const expected = new Int32Array(size);
+    for (let index = 0; index < size; index += 1) {
+      let pixel;
+      if (pattern === 0) pixel = 0x55;
+      else if (pattern === 1) pixel = (((index / 320) | 0) + index) & 1 ? 0xff : 0;
+      else if (pattern === 2) pixel = ((index * 73 + 63) & 63) | (((index >>> 3) & 3) << 6);
+      else {
+        random = (Math.imul(random, 1664525) + 1013904223) | 0;
+        pixel = random & 255;
+      }
+      memory[base + index] = pixel;
+      expected[index] = pixel;
+    }
+    memory[base - 1] = 0x12345678;
+    memory[base + size] = -0x1234567;
+    memory[at("VHGNDsmoothcx")] = cx;
+    memory[at("VHGNDsmoothcy")] = cy;
+    for (const name of [
+      "VHGNDsmoothx", "VHGNDsmoothy", "VHGNDsmoothpx", "VHGNDsmoothpy",
+      "VHGNDsmoothsum", "VHGNDsmoothavg", "VHGNDsmoothptr",
+    ]) memory[at(name)] = 0x55555555;
+    machine.A = 11;
+    machine.B = 13;
+    machine.C = 17;
+    machine.D = 19;
+    machine.E = 23;
+    machine.X = 29;
+    machine.stack = Int32Array.from([31, 37, 41, 43]);
+    machine.depth = 3;
+    machine.halted = false;
+    const terminal = smoothReference(expected, cx, cy);
+
+    intrinsic[SERVICES.groundHudLampSmooth](machine, linked);
+
+    assert.deepEqual([...memory.subarray(base, base + size)], [...expected]);
+    assert.equal(memory[base - 1], 0x12345678);
+    assert.equal(memory[base + size], -0x1234567);
+    assert.equal(memory[at("VHGNDsmoothcx")], cx);
+    assert.equal(memory[at("VHGNDsmoothcy")], cy);
+    assert.equal(memory[at("VHGNDsmoothx")], cx + 6);
+    assert.equal(memory[at("VHGNDsmoothy")], cy + 6);
+    assert.equal(memory[at("VHGNDsmoothpx")], 6);
+    assert.equal(memory[at("VHGNDsmoothpy")], 6);
+    assert.equal(memory[at("VHGNDsmoothsum")], 25);
+    assert.equal(memory[at("VHGNDsmoothavg")], terminal.average);
+    assert.equal(memory[at("VHGNDsmoothptr")], base + terminal.pointer);
+    assert.equal(machine.A, 6);
+    assert.equal(machine.B, 13);
+    assert.equal(machine.C, 25);
+    assert.equal(machine.D, base + terminal.pointer + 321);
+    assert.equal(machine.E, 23);
+    assert.equal(machine.X, 0x646f6e65);
+    assert.deepEqual([...machine.stack], [31, 37, 41, 43]);
+    assert.equal(machine.depth, 3);
+    assert.equal(machine.halted, false);
+  }
 });
 
 test("background-cache services preserve shared Lino forward-copy semantics", () => {

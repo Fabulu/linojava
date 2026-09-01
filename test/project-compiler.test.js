@@ -219,6 +219,154 @@ test("static unsigned multiply service matches its shared Lino fallback", async 
   assert.equal(serviceCalls, pairs.length);
 });
 
+test("static HUD lamp smoother service matches all shared Lino call paths", async () => {
+  const padding = "0;".repeat(4_000);
+  const source = `
+    "variables"
+      nw = 0; RADPT = 0;
+      VHGNDsmoothcx = 0; VHGNDsmoothcy = 0; VHGNDsmoothx = 0; VHGNDsmoothy = 0;
+      VHGNDsmoothpx = 0; VHGNDsmoothpy = 0; VHGNDsmoothsum = 0;
+      VHGNDsmoothavg = 0; VHGNDsmoothptr = 0;
+      selector = 0; continuation = 0; smooth pointer = VHGND HUD lamp smooth;
+      page = 0; ${padding}
+    "programme"
+      A = [selector];
+      ? A = 0 -> Call zero;
+      ? A = 1 -> Call one;
+      ? A = 2 -> Call two;
+      -> Call three;
+    "Call zero"
+      => VHGND HUD lamp smooth; [continuation] = 10; end;
+    "Call one"
+      => VHGND HUD lamp smooth; [continuation] = 20; end;
+    "Call two"
+      => VHGND HUD lamp smooth; [continuation] = 30; end;
+    "Call three"
+      => VHGND HUD lamp smooth; [continuation] = 40; end;
+    "Indirect root"
+      => [smooth pointer]; [continuation] = 50; end;
+    "VHGND HUD lamp smooth"
+      A = [VHGNDsmoothcy]; A - 5; [VHGNDsmoothy] = A; [VHGNDsmoothpy] = 0; [VHGNDsmoothpy] - 5;
+    "VHGND HUD lamp smooth row"
+      A = [VHGNDsmoothcx]; A - 5; [VHGNDsmoothx] = A; [VHGNDsmoothpx] = 0; [VHGNDsmoothpx] - 5;
+    "VHGND HUD lamp smooth pixel"
+      A = [VHGNDsmoothpx]; C = A; A '* C; [VHGNDsmoothsum] = A;
+      A = [VHGNDsmoothpy]; C = A; A '* C; C = [VHGNDsmoothsum]; A + C;
+      ? A >= 25 -> VHGND HUD lamp smooth next;
+      A = [VHGNDsmoothy]; A '* 320; A + [VHGNDsmoothx]; A + RADPT; A + nw;
+      [VHGNDsmoothptr] = A; D = A; A = [D]; A & 63; [VHGNDsmoothsum] = A;
+      D+; A = [D]; A & 63; C = [VHGNDsmoothsum]; C + A; [VHGNDsmoothsum] = C;
+      A = [VHGNDsmoothptr]; A + 320; D = A; A = [D]; A & 63;
+      C = [VHGNDsmoothsum]; C + A; [VHGNDsmoothsum] = C;
+      D+; A = [D]; A & 63; C = [VHGNDsmoothsum]; C + A; C / 4; [VHGNDsmoothavg] = C;
+      D = [VHGNDsmoothptr]; A = [D]; A & 192; A + [VHGNDsmoothavg]; [D] = A;
+      D+; A = [D]; A & 192; A + [VHGNDsmoothavg]; [D] = A;
+      A = [VHGNDsmoothptr]; A + 320; D = A; A = [D]; A & 192; A + [VHGNDsmoothavg]; [D] = A;
+      D+; A = [D]; A & 192; A + [VHGNDsmoothavg]; [D] = A;
+    "VHGND HUD lamp smooth next"
+      [VHGNDsmoothx]+; [VHGNDsmoothpx]+;
+      A = [VHGNDsmoothpx]; ? A <= 5 -> VHGND HUD lamp smooth pixel;
+      [VHGNDsmoothy]+; [VHGNDsmoothpy]+;
+      A = [VHGNDsmoothpy]; ? A <= 5 -> VHGND HUD lamp smooth row;
+      end;
+  `;
+  const project = await loadProject("hud-smoother-service.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const implementation = allIntrinsics[NOCTIS_SERVICES.groundHudLampSmooth];
+  const intrinsics = { [NOCTIS_SERVICES.groundHudLampSmooth]: implementation };
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const direct = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    intrinsics: {
+      [NOCTIS_SERVICES.groundHudLampSmooth](machine, directLinked) {
+        serviceCalls += 1;
+        implementation(machine, directLinked);
+      },
+    },
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const at = (name) => linked.symbols.get(name).value;
+  const first = 300;
+  const last = 3_300;
+  const initialize = (program, selector) => {
+    program.reset();
+    let random = (0x6d2b79f5 ^ selector) | 0;
+    for (let index = first; index < last; index += 1) {
+      let pixel;
+      if (selector === 0) pixel = 0x55;
+      else if (selector === 1) pixel = (((index / 320) | 0) + index) & 1 ? 0xff : 0;
+      else if (selector === 2) pixel = ((index * 73 + 63) & 63) | (((index >>> 3) & 3) << 6);
+      else {
+        random = (Math.imul(random, 1664525) + 1013904223) | 0;
+        pixel = random & 255;
+      }
+      program.machine.memory[index] = pixel;
+    }
+    program.machine.memory[first - 1] = 0x12345678;
+    program.machine.memory[last] = -0x1234567;
+    program.machine.memory[at("selector")] = selector;
+    program.machine.memory[at("vhgndsmoothcx")] = 5;
+    program.machine.memory[at("vhgndsmoothcy")] = 5;
+    program.machine.A = 11;
+    program.machine.B = 13;
+    program.machine.C = 17;
+    program.machine.D = 19;
+    program.machine.E = 23;
+    program.machine.X = 29;
+    program.machine.stack[0] = 31;
+    program.machine.stack[1] = 37;
+    program.machine.stack[2] = 41;
+    program.machine.depth = 3;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X, program.machine.depth,
+    ],
+    stack: [...program.machine.stack.subarray(0, 3)],
+  });
+
+  for (let selector = 0; selector < 4; selector += 1) {
+    for (const program of [fallback, direct, precompiled]) {
+      initialize(program, selector);
+      assert.equal(program.run(6_000).status, "halted");
+    }
+    assert.equal(fallback.machine.memory[at("continuation")], 10 * (selector + 1));
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+    assert.equal(fallback.machine.memory[first - 1], 0x12345678);
+    assert.equal(fallback.machine.memory[last], -0x1234567);
+    assert.equal(fallback.machine.memory[at("vhgndsmoothcx")], 5);
+    assert.equal(fallback.machine.memory[at("vhgndsmoothcy")], 5);
+    assert.ok(fallback.machine.memory[at("vhgndsmoothptr")] > 0);
+  }
+  assert.equal(serviceCalls, 4);
+
+  for (const label of ["indirectroot", "vhgndhudlampsmooth"]) {
+    for (const program of [fallback, direct]) {
+      initialize(program, 3);
+      program.machine.pc = linked.labels.get(label);
+      assert.equal(program.run(6_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+  }
+  assert.equal(serviceCalls, 4);
+  assert.equal(direct.machine.memory[at("continuation")], 0);
+});
+
 test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript", async () => {
   const source = `
     "variables" dividend = 0ffffffffh; divisor = 2; float one = 1f; float two = 2f; result = 0;
