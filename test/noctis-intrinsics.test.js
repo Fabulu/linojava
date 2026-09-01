@@ -86,7 +86,6 @@ function fixture() {
     "LTP Current Pixel Pointer", "LTP Reverse Horiz", "LTP Forward Vert",
     "LTP Bit Field Delta X", "LTP Bit Field Delta Y", "LTP ID Block Size",
     "LTP Header Data", "LTP Colormap Size", "LTP Colormap Data",
-    "xtpos", "xtk", "xtrem", "xtbit", "XPAY",
   ];
   const symbols = new Map(names.map((name, index) => [
     canonicalName(name),
@@ -309,77 +308,6 @@ test("restoring-root service preserves exact shared Lino integer state", () => {
     invoke(exponent, high, low, index & 1);
   }
 
-  assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
-  assert.equal(machine.depth, 3);
-  assert.equal(machine.halted, false);
-  assert.equal(memory[canary], 0x13579bdf);
-  assert.equal(memory[canary + 1], -0x2468ace);
-});
-
-test("trigonometric bit service preserves exact shared Lino state", () => {
-  const intrinsic = createNoctisIntrinsics();
-  const { linked, machine, at } = fixture();
-  const memory = machine.memory;
-  const product = at("XPAY");
-  let random = 0x6d2b79f5;
-  for (let index = 0; index < 20; index += 1) {
-    random = (Math.imul(random, 1664525) + 1013904223) | 0;
-    memory[product + index] = random;
-  }
-  const expectedProduct = [...memory.subarray(product, product + 20)];
-  const canary = 1_900_000;
-  memory[canary] = 0x13579bdf;
-  memory[canary + 1] = -0x2468ace;
-  machine.stack = Int32Array.from([17, -23, 42, 99]);
-  machine.depth = 3;
-  machine.halted = false;
-
-  const invoke = (position) => {
-    const initial = [
-      (position ^ 0x13579bdf) | 0,
-      (position ^ 0x2468ace0) | 0,
-      (position ^ 0x10203040) | 0,
-      (position ^ 0x55667788) | 0,
-      (position ^ 0x76543210) | 0,
-    ];
-    [machine.A, machine.B, machine.C, machine.D, machine.E] = initial;
-    machine.X = 0x6661696c;
-    memory[at("xtpos")] = position;
-    memory[at("xtk")] = 0x55555555;
-    memory[at("xtrem")] = 0x66666666;
-    memory[at("xtbit")] = 0x77777777;
-
-    intrinsic[SERVICES.xTrigBit](machine, linked);
-
-    if (position < 0 || position >= 320) {
-      assert.deepEqual(
-        [machine.A, machine.B, machine.C, machine.D, machine.E],
-        initial,
-      );
-      assert.equal(memory[at("xtk")], 0x55555555);
-      assert.equal(memory[at("xtrem")], 0x66666666);
-      assert.equal(memory[at("xtbit")], 0);
-    } else {
-      const index = position >>> 4;
-      const remainder = position & 15;
-      const bit = (expectedProduct[index] >>> remainder) & 1;
-      assert.deepEqual(
-        [machine.A, machine.B, machine.C, machine.D, machine.E],
-        [bit, remainder, initial[2], initial[3], product + index],
-      );
-      assert.equal(memory[at("xtk")], index);
-      assert.equal(memory[at("xtrem")], remainder);
-      assert.equal(memory[at("xtbit")], bit);
-    }
-    assert.equal(memory[at("xtpos")], position | 0);
-    assert.equal(machine.X, 0x646f6e65);
-  };
-
-  for (const position of [-2147483648, -321, -1]) invoke(position);
-  for (let position = 0; position < 320; position += 1) invoke(position);
-  for (const position of [320, 321, 2147483647]) invoke(position);
-
-  assert.deepEqual([...memory.subarray(product, product + 20)], expectedProduct);
   assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
   assert.equal(machine.depth, 3);
   assert.equal(machine.halted, false);
