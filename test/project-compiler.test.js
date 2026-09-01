@@ -441,6 +441,17 @@ test("static restoring-root service matches all shared Lino call paths", async (
   }
   assert.equal(serviceCalls, cases.length);
   assert.equal(direct.machine.memory[at("continuation")], 0);
+
+  const rootHandle = linked.labels.get("xrootcore") + 1;
+  for (const program of [fallback, direct, precompiled]) {
+    initialize(program, 0, 16384, 0xd413cccf, -411462895);
+    const outerPc = program.machine.pc;
+    assert.ok(program.machine.callCode(rootHandle, 10_000) > 0);
+    assert.equal(program.machine.pc, outerPc);
+  }
+  assert.deepEqual(state(direct), state(fallback));
+  assert.deepEqual(state(precompiled), state(fallback));
+  assert.equal(serviceCalls, cases.length);
 });
 
 test("static HUD lamp smoother service matches all shared Lino call paths", async () => {
