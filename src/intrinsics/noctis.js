@@ -235,7 +235,6 @@ const SERVICE_IDS = Object.freeze({
   copyLayer: "service:copyl2l",
   copyLayerRegion: "service:copyl2lregion",
   uafCopyCommon: "service:uafcopycommon",
-  xFromInt: "service:xfromint",
   xMul32u: "service:xmul32u",
   xRootCore: "service:xrootcore",
   compareFloat64: "service:fcmp",
@@ -345,7 +344,6 @@ const tgaAddressCaches = new WeakMap();
 const textAddressCaches = new WeakMap();
 const ekeyAddressCaches = new WeakMap();
 const surfaceBulkAddressCaches = new WeakMap();
-const xFromIntAddressCaches = new WeakMap();
 const xMul32uAddressCaches = new WeakMap();
 const xRootCoreAddressCaches = new WeakMap();
 const paletteShadeAddressCaches = new WeakMap();
@@ -1512,59 +1510,6 @@ function compareFloat64Inline(linked) {
   }`;
 }
 
-
-function xFromIntAddresses(linked) {
-  let cached = xFromIntAddressCaches.get(linked);
-  if (cached) return cached;
-  cached = {
-    input: address(linked, "XIN"),
-    sign: address(linked, "XS"),
-    exponent: address(linked, "XE"),
-    mantissaHigh: address(linked, "XMH"),
-    mantissaLow: address(linked, "XML"),
-    temporary: address(linked, "xtmp"),
-    iterations: address(linked, "xiter"),
-  };
-  xFromIntAddressCaches.set(linked, cached);
-  return cached;
-}
-
-function xFromInt(machine, linked) {
-  const memory = machine.memory;
-  const p = xFromIntAddresses(linked);
-  const input = memory[p.input] | 0;
-  memory[p.sign] = 0;
-  if (input === 0) {
-    memory[p.exponent] = 0;
-    memory[p.mantissaHigh] = 0;
-    memory[p.mantissaLow] = 0;
-    machine.X = LINO_DONE;
-    return;
-  }
-  const magnitude = input < 0 ? (-input) | 0 : input;
-  const iterations = Math.clz32(magnitude);
-  const normalized = magnitude << iterations;
-  if (input < 0) memory[p.sign] = 1;
-  memory[p.temporary] = normalized;
-  memory[p.iterations] = iterations;
-  memory[p.mantissaHigh] = normalized;
-  memory[p.mantissaLow] = 0;
-  memory[p.exponent] = 16414 - iterations;
-  machine.X = LINO_DONE;
-}
-
-function xFromIntInline(linked) {
-  const p = xFromIntAddresses(linked);
-  return `{
-    const xfiInput=m[${p.input}]|0;m[${p.sign}]=0;
-    if(xfiInput===0){m[${p.exponent}]=0;m[${p.mantissaHigh}]=0;m[${p.mantissaLow}]=0;}
-    else{const xfiMagnitude=xfiInput<0?(-xfiInput)|0:xfiInput;
-      const xfiIterations=Math.clz32(xfiMagnitude),xfiNormalized=xfiMagnitude<<xfiIterations;
-      if(xfiInput<0)m[${p.sign}]=1;m[${p.temporary}]=xfiNormalized;m[${p.iterations}]=xfiIterations;
-      m[${p.mantissaHigh}]=xfiNormalized;m[${p.mantissaLow}]=0;m[${p.exponent}]=16414-xfiIterations;}
-    X=${LINO_DONE};
-  }`;
-}
 
 function xMul32uAddresses(linked) {
   let cached = xMul32uAddressCaches.get(linked);
@@ -14111,7 +14056,6 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.copyLayer]: copyLayer,
     [SERVICE_IDS.copyLayerRegion]: copyLayerRegion,
     [SERVICE_IDS.uafCopyCommon]: uafCopyCommon,
-    [SERVICE_IDS.xFromInt]: xFromInt,
     [SERVICE_IDS.xMul32u]: xMul32u,
     [SERVICE_IDS.xRootCore]: xRootCore,
     [SERVICE_IDS.compareFloat64]: compareFloat64Service,
@@ -14457,9 +14401,6 @@ export function createNoctisIntrinsics(overrides = {}) {
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.compareFloat64)) {
     implementations[SERVICE_IDS.compareFloat64].inline = compareFloat64Inline;
-  }
-  if (!Object.hasOwn(overrides, SERVICE_IDS.xFromInt)) {
-    implementations[SERVICE_IDS.xFromInt].inline = xFromIntInline;
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.xMul32u)) {
     implementations[SERVICE_IDS.xMul32u].inline = xMul32uInline;
