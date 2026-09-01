@@ -757,12 +757,16 @@ test("static runners execute binary64 instructions identically", async () => {
 
 test("structured self-backedges preserve budgets, profiles, and interior entry", async () => {
   const source = `
-    "variables" counter17 = 0; counter26 = 0; scratch = 0;
+    "variables" counter17 = 0; counter18 = 0; counter26 = 0; scratch = 0;
     "programme" end;
     "Loop 17"
       ${"[scratch]+;".repeat(14)}
       [counter17]-; A = [counter17]; ? A != 0 -> Loop 17;
     "Loop 17 done" leave;
+    "Loop 18"
+      ${"[scratch]+;".repeat(15)}
+      [counter18]-; A = [counter18]; ? A != 0 -> Loop 18;
+    "Loop 18 done" leave;
     "Loop 26"
       ${"[scratch]+;".repeat(23)}
       [counter26]-; A = [counter26]; ? A != 0 -> Loop 26;
@@ -772,7 +776,7 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
     resolveSource() { return source; },
   });
   const linked = linkProject(project);
-  const labels = ["Loop 17", "Loop 26"];
+  const labels = ["Loop 17", "Loop 18", "Loop 26"];
   const generatedSource = emitStaticRunnerModule(linked, {}, {
     regionSize: 256,
     structuredSelfBackedgeLabels: labels,
@@ -800,6 +804,7 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
   const initialize = (program, pc) => {
     program.reset();
     program.machine.memory[at("counter17")] = 4;
+    program.machine.memory[at("counter18")] = 4;
     program.machine.memory[at("counter26")] = 4;
     program.machine.memory[at("scratch")] = 0x12345678;
     program.machine.A = 11;
@@ -824,9 +829,10 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
     depth: program.machine.depth,
     stack: [...program.machine.stack.subarray(0, 8)],
   });
-  const budgets = [0, 1, 16, 17, 18, 25, 26, 27, 9_999, 10_000, 10_001];
+  const budgets = [0, 1, 16, 17, 18, 19, 25, 26, 27, 9_999, 10_000, 10_001];
   for (const [label, done, length] of [
     ["loop17", "loop17done", 17],
+    ["loop18", "loop18done", 18],
     ["loop26", "loop26done", 26],
   ]) {
     const start = linked.labels.get(label);
@@ -846,6 +852,21 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
       }
     }
   }
+
+  const callStates = [];
+  const callCounts = [];
+  for (const program of [baseline, candidate, precompiled]) {
+    initialize(program, 0);
+    const outerPc = program.machine.pc;
+    callCounts.push(program.machine.callCode(linked.labels.get("loop18") + 1, 10_000));
+    assert.equal(program.machine.pc, outerPc);
+    callStates.push(state(program));
+  }
+  assert.equal(callCounts[1], callCounts[0]);
+  assert.equal(callCounts[2], callCounts[0]);
+  assert.deepEqual(callStates[1], callStates[0]);
+  assert.deepEqual(callStates[2], callStates[0]);
+  assert.deepEqual(candidate.machine.profile, baseline.machine.profile);
 });
 
 test("native fragments require explicit portable intrinsic implementations", async () => {
