@@ -236,6 +236,7 @@ const SERVICE_IDS = Object.freeze({
   copyLayerRegion: "service:copyl2lregion",
   uafCopyCommon: "service:uafcopycommon",
   xMul32u: "service:xmul32u",
+  mul64u: "service:mul64u",
   xRootCore: "service:xrootcore",
   compareFloat64: "service:fcmp",
   spaceClear: "service:vhgspaceclear",
@@ -345,6 +346,7 @@ const textAddressCaches = new WeakMap();
 const ekeyAddressCaches = new WeakMap();
 const surfaceBulkAddressCaches = new WeakMap();
 const xMul32uAddressCaches = new WeakMap();
+const mul64uAddressCaches = new WeakMap();
 const xRootCoreAddressCaches = new WeakMap();
 const paletteShadeAddressCaches = new WeakMap();
 const paletteTavolaAddressCaches = new WeakMap();
@@ -1581,6 +1583,79 @@ function xMul32uInline(linked) {
     m[${p.xup0}]=xmulP0;m[${p.xup1}]=xmulP1;m[${p.xup2}]=xmulP2;m[${p.xup3}]=xmulP3;
     m[${p.xutmp}]=xmulTmp;m[${p.xumid}]=xmulMid;m[${p.xulo}]=xmulLow;m[${p.xuhi}]=xmulHigh;
     A=xmulHigh;B=xmulMid>>>16;X=${LINO_DONE};
+  }`;
+}
+
+function mul64uAddresses(linked) {
+  let cached = mul64uAddressCaches.get(linked);
+  if (cached) return cached;
+  cached = {
+    m64a: address(linked, "m64a"),
+    m64b: address(linked, "m64b"),
+    m64lo: address(linked, "m64lo"),
+    m64hi: address(linked, "m64hi"),
+    mlxl: address(linked, "mlxl"),
+    mlxh: address(linked, "mlxh"),
+    mlyl: address(linked, "mlyl"),
+    mlyh: address(linked, "mlyh"),
+    mlp0: address(linked, "mlp0"),
+    mlp1: address(linked, "mlp1"),
+    mlp2: address(linked, "mlp2"),
+    mlp3: address(linked, "mlp3"),
+    mlmid: address(linked, "mlmid"),
+    mltmp: address(linked, "mltmp"),
+  };
+  mul64uAddressCaches.set(linked, cached);
+  return cached;
+}
+
+function mul64u(machine, linked) {
+  const memory = machine.memory;
+  const p = mul64uAddresses(linked);
+  const ua = memory[p.m64a] >>> 0;
+  const ub = memory[p.m64b] >>> 0;
+  const xl = ua & 0xffff;
+  const xh = ua >>> 16;
+  const yl = ub & 0xffff;
+  const yh = ub >>> 16;
+  const product0 = Math.imul(xl, yl) | 0;
+  const product1 = Math.imul(xl, yh) | 0;
+  const product2 = Math.imul(xh, yl) | 0;
+  const product3 = Math.imul(xh, yh) | 0;
+  const middle = ((product0 >>> 16) + (product1 & 0xffff) + (product2 & 0xffff)) | 0;
+  const temporary = ((middle & 0xffff) << 16) | 0;
+  const low = ((product0 & 0xffff) | temporary) | 0;
+  const high = (product3 + (product1 >>> 16) + (product2 >>> 16) + (middle >>> 16)) | 0;
+  memory[p.mlxl] = xl;
+  memory[p.mlxh] = xh;
+  memory[p.mlyl] = yl;
+  memory[p.mlyh] = yh;
+  memory[p.mlp0] = product0;
+  memory[p.mlp1] = product1;
+  memory[p.mlp2] = product2;
+  memory[p.mlp3] = product3;
+  memory[p.mlmid] = middle;
+  memory[p.mltmp] = temporary;
+  memory[p.m64lo] = low;
+  memory[p.m64hi] = high;
+  machine.A = high;
+  machine.B = middle >>> 16;
+  machine.X = LINO_DONE;
+}
+
+function mul64uInline(linked) {
+  const p = mul64uAddresses(linked);
+  return `{
+    const mul64Ua=m[${p.m64a}]>>>0,mul64Ub=m[${p.m64b}]>>>0;
+    const mul64Xl=mul64Ua&65535,mul64Xh=mul64Ua>>>16,mul64Yl=mul64Ub&65535,mul64Yh=mul64Ub>>>16;
+    const mul64P0=Math.imul(mul64Xl,mul64Yl)|0,mul64P1=Math.imul(mul64Xl,mul64Yh)|0,mul64P2=Math.imul(mul64Xh,mul64Yl)|0,mul64P3=Math.imul(mul64Xh,mul64Yh)|0;
+    const mul64Mid=((mul64P0>>>16)+(mul64P1&65535)+(mul64P2&65535))|0;
+    const mul64Tmp=((mul64Mid&65535)<<16)|0,mul64Low=((mul64P0&65535)|mul64Tmp)|0;
+    const mul64High=(mul64P3+(mul64P1>>>16)+(mul64P2>>>16)+(mul64Mid>>>16))|0;
+    m[${p.mlxl}]=mul64Xl;m[${p.mlxh}]=mul64Xh;m[${p.mlyl}]=mul64Yl;m[${p.mlyh}]=mul64Yh;
+    m[${p.mlp0}]=mul64P0;m[${p.mlp1}]=mul64P1;m[${p.mlp2}]=mul64P2;m[${p.mlp3}]=mul64P3;
+    m[${p.mlmid}]=mul64Mid;m[${p.mltmp}]=mul64Tmp;m[${p.m64lo}]=mul64Low;m[${p.m64hi}]=mul64High;
+    A=mul64High;B=mul64Mid>>>16;X=${LINO_DONE};
   }`;
 }
 
@@ -14057,6 +14132,7 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.copyLayerRegion]: copyLayerRegion,
     [SERVICE_IDS.uafCopyCommon]: uafCopyCommon,
     [SERVICE_IDS.xMul32u]: xMul32u,
+    [SERVICE_IDS.mul64u]: mul64u,
     [SERVICE_IDS.xRootCore]: xRootCore,
     [SERVICE_IDS.compareFloat64]: compareFloat64Service,
     [SERVICE_IDS.spaceClear]: spaceClear,
@@ -14404,6 +14480,9 @@ export function createNoctisIntrinsics(overrides = {}) {
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.xMul32u)) {
     implementations[SERVICE_IDS.xMul32u].inline = xMul32uInline;
+  }
+  if (!Object.hasOwn(overrides, SERVICE_IDS.mul64u)) {
+    implementations[SERVICE_IDS.mul64u].inline = mul64uInline;
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.xRootCore)) {
     implementations[SERVICE_IDS.xRootCore].inline = xRootCoreInline;
