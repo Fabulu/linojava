@@ -40,7 +40,7 @@ function fixture() {
     "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
     "xua", "xub", "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1",
     "xup2", "xup3", "xutmp", "xumid", "xulo", "xuhi",
-    "XS", "XE", "XMH", "XML", "xtmp", "srd0", "srd1", "srd2", "srd3",
+    "XS", "XE", "XMH", "XML", "XIN", "xiter", "xtmp", "srd0", "srd1", "srd2", "srd3",
     "sqrh", "sqrl", "sqmh", "sqml", "sqcarry", "sqstep",
     "srm0", "srm1", "srm2", "srm3",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
@@ -188,6 +188,80 @@ test("unsigned multiply service preserves exact shared Lino scratch state", () =
   assert.equal(machine.C, -123456789);
   assert.equal(machine.D, 0x76543210);
   assert.equal(machine.E, -987654321);
+  assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
+  assert.equal(machine.depth, 3);
+  assert.equal(machine.halted, false);
+  assert.equal(memory[canary], 0x13579bdf);
+  assert.equal(memory[canary + 1], -0x2468ace);
+});
+
+test("integer-to-extended service preserves exact shared Lino state", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const expectedFromInt = (input) => {
+    if (input === 0) return {
+      sign: 0, exponent: 0, high: 0, low: 0,
+      temporary: 0x55555555, iterations: 0x55555555,
+    };
+    const integer = BigInt(input);
+    const magnitude = integer < 0n ? -integer : integer;
+    const iterations = 32 - magnitude.toString(2).length;
+    const normalized = Number(BigInt.asUintN(32, magnitude << BigInt(iterations))) | 0;
+    return {
+      sign: input < 0 ? 1 : 0,
+      exponent: 16414 - iterations,
+      high: normalized,
+      low: 0,
+      temporary: normalized,
+      iterations,
+    };
+  };
+
+  const canary = 1_900_000;
+  memory[canary] = 0x13579bdf;
+  memory[canary + 1] = -0x2468ace;
+  machine.stack = Int32Array.from([17, -23, 42, 99]);
+  machine.depth = 3;
+  machine.halted = false;
+  const registers = [11, -13, 17, -19, 23];
+  const invoke = (input) => {
+    memory[at("XIN")] = input;
+    memory[at("XS")] = 0x55555555;
+    memory[at("XE")] = 0x55555555;
+    memory[at("XMH")] = 0x55555555;
+    memory[at("XML")] = 0x55555555;
+    memory[at("xtmp")] = 0x55555555;
+    memory[at("xiter")] = 0x55555555;
+    [machine.A, machine.B, machine.C, machine.D, machine.E] = registers;
+    machine.X = 0x6661696c;
+    const expected = expectedFromInt(input);
+
+    intrinsic[SERVICES.xFromInt](machine, linked);
+
+    assert.equal(memory[at("XIN")], input | 0);
+    assert.equal(memory[at("XS")], expected.sign);
+    assert.equal(memory[at("XE")], expected.exponent);
+    assert.equal(memory[at("XMH")], expected.high);
+    assert.equal(memory[at("XML")], expected.low);
+    assert.equal(memory[at("xtmp")], expected.temporary);
+    assert.equal(memory[at("xiter")], expected.iterations);
+    assert.deepEqual([machine.A, machine.B, machine.C, machine.D, machine.E], registers);
+    assert.equal(machine.X, 0x646f6e65);
+  };
+
+  const edges = [
+    -0x80000000, -0x7fffffff, -0x40000000, -0x10000, -0x8001, -0x8000,
+    -2, -1, 0, 1, 2, 3, 0x7fff, 0x8000, 0xffff, 0x10000,
+    0x3fffffff, 0x40000000, 0x7ffffffe, 0x7fffffff,
+  ];
+  for (const input of edges) invoke(input);
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 4096; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    invoke(random);
+  }
+
   assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
   assert.equal(machine.depth, 3);
   assert.equal(machine.halted, false);

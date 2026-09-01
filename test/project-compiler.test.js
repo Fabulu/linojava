@@ -124,6 +124,157 @@ test("direct calls use an available portable service fast path", async () => {
   assert.equal(program.machine.memory[program.linked.symbols.get("result").value], 42);
 });
 
+test("static integer-to-extended service matches all shared Lino call paths", async () => {
+  const source = `
+    "constants" XBIAS = 16383;
+    "variables"
+      XIN = 0; XS = 0; XE = 0; XMH = 0; XML = 0; xtmp = 0; xiter = 0;
+      selector = 0; continuation = 0; conversion pointer = XFromInt;
+    "programme"
+      A = [selector];
+      ? A = 0 -> Call zero;
+      ? A = 1 -> Call one;
+      -> Call two;
+    "Call zero"
+      => XFromInt; [continuation] = 10; end;
+    "Call one"
+      => XFromInt; [continuation] = 20; end;
+    "Call two"
+      => XFromInt; [continuation] = 30; end;
+    "Indirect conversion"
+      => [conversion pointer]; [continuation] = 40; end;
+    "XFromInt"
+      ---->;
+      => XFromInt body;
+      <----;
+      end;
+    "XFromInt body"
+      [XS] = 0;
+      A = [XIN];
+      ? A != 0 -> XFI nonzero;
+      [XE] = 0; [XMH] = 0; [XML] = 0;
+      end;
+    "XFI nonzero"
+      A = [XIN]; A & 80000000h;
+      ? A = 0 -> XFI pos;
+      [XS] = 1;
+      A = 0; A - [XIN]; [xtmp] = A;
+      -> XFI norm;
+    "XFI pos"
+      A = [XIN]; [xtmp] = A;
+    "XFI norm"
+      [xiter] = 0;
+    "XFI shl"
+      A = [xtmp]; A & 80000000h;
+      ? A != 0 -> XFI done;
+      A = [xtmp]; A < 1; [xtmp] = A;
+      [xiter]+;
+      -> XFI shl;
+    "XFI done"
+      A = [xtmp]; [XMH] = A;
+      [XML] = 0;
+      A = XBIAS; A + 31; A - [xiter]; [XE] = A;
+      end;
+  `;
+  const project = await loadProject("xfromint-service.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const implementation = allIntrinsics[NOCTIS_SERVICES.xFromInt];
+  const intrinsics = { [NOCTIS_SERVICES.xFromInt]: implementation };
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const direct = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    intrinsics: {
+      [NOCTIS_SERVICES.xFromInt](machine, directLinked) {
+        serviceCalls += 1;
+        implementation(machine, directLinked);
+      },
+    },
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const at = (name) => linked.symbols.get(name).value;
+  const initialize = (program, selector, input) => {
+    program.reset();
+    program.machine.memory[at("selector")] = selector;
+    program.machine.memory[at("xin")] = input;
+    for (const name of ["xs", "xe", "xmh", "xml", "xtmp", "xiter"]) {
+      program.machine.memory[at(name)] = 0x55555555;
+    }
+    program.machine.A = 11;
+    program.machine.B = -13;
+    program.machine.C = 17;
+    program.machine.D = -19;
+    program.machine.E = 23;
+    program.machine.X = 0x6661696c;
+    program.machine.stack[0] = 29;
+    program.machine.stack[1] = -31;
+    program.machine.depth = 2;
+    program.machine.halted = false;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X, program.machine.depth, program.machine.halted,
+    ],
+    stack: [...program.machine.stack.subarray(0, program.machine.depth)],
+  });
+  const cases = [
+    -0x80000000, -0x7fffffff, -0x40000000, -0x10000, -2, -1, 0,
+    1, 2, 3, 0x7fff, 0x8000, 0xffff, 0x10000, 0x40000000, 0x7fffffff,
+  ];
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 64; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    cases.push(random);
+  }
+
+  for (let index = 0; index < cases.length; index += 1) {
+    const selector = index % 3;
+    for (const program of [fallback, direct, precompiled]) {
+      initialize(program, selector, cases[index]);
+      assert.equal(program.run(1_000).status, "halted");
+    }
+    assert.equal(fallback.machine.memory[at("continuation")], 10 * (selector + 1));
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+  }
+  assert.equal(serviceCalls, cases.length);
+
+  for (const label of ["indirectconversion", "xfromint"]) {
+    for (const program of [fallback, direct]) {
+      initialize(program, 0, -123456789);
+      program.machine.pc = linked.labels.get(label);
+      assert.equal(program.run(1_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+  }
+  assert.equal(serviceCalls, cases.length);
+  assert.equal(direct.machine.memory[at("continuation")], 0);
+
+  const conversionHandle = linked.labels.get("xfromint") + 1;
+  for (const program of [fallback, direct, precompiled]) {
+    initialize(program, 0, -123456789);
+    const outerPc = program.machine.pc;
+    assert.ok(program.machine.callCode(conversionHandle, 1_000) > 0);
+    assert.equal(program.machine.pc, outerPc);
+  }
+  assert.deepEqual(state(direct), state(fallback));
+  assert.deepEqual(state(precompiled), state(fallback));
+  assert.equal(serviceCalls, cases.length);
+});
+
 test("static unsigned multiply service matches its shared Lino fallback", async () => {
   const source = `
     "constants" XM16 = 65535;
