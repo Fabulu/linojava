@@ -219,6 +219,230 @@ test("static unsigned multiply service matches its shared Lino fallback", async 
   assert.equal(serviceCalls, pairs.length);
 });
 
+test("static restoring-root service matches all shared Lino call paths", async () => {
+  const source = `
+    "constants" XBIAS = 16383; XM16 = 65535;
+    "variables"
+      XS = 0; XE = 0; XMH = 0; XML = 0; xtmp = 0;
+      srd0 = 0; srd1 = 0; srd2 = 0; srd3 = 0;
+      sqrh = 0; sqrl = 0; sqmh = 0; sqml = 0; sqcarry = 0; sqstep = 0;
+      srm0 = 0; srm1 = 0; srm2 = 0; srm3 = 0;
+      selector = 0; continuation = 0; root pointer = XRootCore;
+    "programme"
+      A = [selector];
+      ? A = 0 -> Call zero;
+      ? A = 1 -> Call one;
+      -> Call two;
+    "Call zero"
+      => XRootCore; [continuation] = 10; end;
+    "Call one"
+      => XRootCore; [continuation] = 20; end;
+    "Call two"
+      => XRootCore; [continuation] = 30; end;
+    "Indirect root"
+      => [root pointer]; [continuation] = 40; end;
+    "XRootCore"
+      A = [XE]; A - XBIAS; [xtmp] = A;
+      A = [xtmp]; A & 1;
+      ? A = 0 -> XRoot even;
+      [srd0] = 0; [srd1] = 0;
+      A = [XML]; [srd2] = A;
+      A = [XMH]; [srd3] = A;
+      A = [xtmp]; A - 1; [xtmp] = A;
+      -> XRoot radicand ready;
+    "XRoot even"
+      [srd0] = 0;
+      A = [XML]; A < 31; [srd1] = A;
+      A = [XML]; A > 1; [srd2] = A;
+      A = [XMH]; A < 31; B = [srd2]; A | B; [srd2] = A;
+      A = [XMH]; A > 1; [srd3] = A;
+    "XRoot radicand ready"
+      [sqrh] = 0; [sqrl] = 0;
+      [srm0] = 0; [srm1] = 0; [srm2] = 0;
+      [sqstep] = srd3; A = [srd3]; [sqmh] = A; [srd3] = 0;
+      [sqml] = 16;
+    "XRoot restoring loop"
+      A = [sqmh]; E = A;
+      A < 2; [sqmh] = A;
+      A = E; A > 30; E = A;
+      A = [srm2]; A < 2; B = [srm1]; B > 30; A | B; [srm2] = A;
+      A = [srm1]; A < 2; B = [srm0]; B > 30; A | B; [srm1] = A;
+      A = [srm0]; A < 2; B = E; A | B; [srm0] = A;
+      A = [sqrl]; A > 31; E = A;
+      A = [sqrh]; A < 1; B = E; A | B; [sqrh] = A;
+      A = [sqrl]; A < 1; [sqrl] = A;
+      A = [sqrh]; A > 31; [sqcarry] = A;
+      A = [sqrh]; A < 1; B = [sqrl]; B > 31; A | B; C = A;
+      A = [sqrl]; A < 1; A | 1; D = A;
+      A = [srm2]; B = [sqcarry];
+      ? A '> B -> XRoot restoring accept;
+      ? A '< B -> XRoot restoring next;
+      A = [srm1]; B = C;
+      ? A '> B -> XRoot restoring accept;
+      ? A '< B -> XRoot restoring next;
+      A = [srm0]; B = D;
+      ? A '< B -> XRoot restoring next;
+    "XRoot restoring accept"
+      A = [srm0]; B = D;
+      ? A '< B -> XRoot restoring low borrow;
+      E = 0; -> XRoot restoring low subtract;
+    "XRoot restoring low borrow"
+      E = 1;
+    "XRoot restoring low subtract"
+      A = [srm0]; A - D; [srm0] = A;
+      A = [srm1]; B = C;
+      ? A '> B -> XRoot restoring middle no borrow;
+      ? A '< B -> XRoot restoring middle borrow;
+      ? E = 0 -> XRoot restoring middle no borrow;
+    "XRoot restoring middle borrow"
+      A = [srm1]; A - C; A - E; [srm1] = A;
+      E = 1; -> XRoot restoring high subtract;
+    "XRoot restoring middle no borrow"
+      A = [srm1]; A - C; A - E; [srm1] = A;
+      E = 0;
+    "XRoot restoring high subtract"
+      A = [srm2]; A - [sqcarry]; A - E; [srm2] = A;
+      [sqrl]+;
+      ? [sqrl] != 0 -> XRoot restoring next;
+      [sqrh]+;
+    "XRoot restoring next"
+      [sqml]-;
+      ? [sqml] != 0 -> XRoot restoring loop;
+      [sqstep]-;
+      ? [sqstep] < srd0 -> XRoot restoring complete;
+      B = [sqstep]; A = [B]; [sqmh] = A;
+      A = 0; [B] = A; [sqml] = 16;
+      -> XRoot restoring loop;
+    "XRoot restoring complete"
+      E = 0;
+      A = [sqrl]; A & XM16;
+      ? A != 0 -> XRoot residual compatible;
+      [srm1]-;
+      ? [srm1] != 0FFFFFFFFh -> XRoot residual compatible;
+      [srm2]-;
+      ? [srm2] != 0FFFFFFFFh -> XRoot residual compatible;
+      E = 0FFFFFFFFh;
+    "XRoot residual compatible"
+      A = E; [srm3] = A;
+      ? E != 0 -> XRoot increment;
+      ? [srm2] != 0 -> XRoot increment;
+      A = [srm1]; B = [sqrh];
+      ? A '> B -> XRoot increment;
+      ? A '< B -> XRoot done;
+      A = [srm0]; B = [sqrl];
+      ? A '> B -> XRoot increment;
+      -> XRoot done;
+    "XRoot increment"
+      [sqrl]+;
+      ? [sqrl] != 0 -> XRoot done;
+      [sqrh]+;
+      ? [sqrh] != 0 -> XRoot overflow;
+      -> XRoot done;
+    "XRoot overflow"
+      [XMH] = 80000000h; [XML] = 0; [xtmp]+;
+      -> XRoot finish;
+    "XRoot done"
+      A = [sqrh]; [XMH] = A;
+      A = [sqrl]; [XML] = A;
+    "XRoot finish"
+      A = [xtmp]; A / 2; A + XBIAS; [XE] = A;
+      [XS] = 0;
+      end;
+  `;
+  const project = await loadProject("xrootcore-service.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const implementation = allIntrinsics[NOCTIS_SERVICES.xRootCore];
+  const intrinsics = { [NOCTIS_SERVICES.xRootCore]: implementation };
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const direct = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    intrinsics: {
+      [NOCTIS_SERVICES.xRootCore](machine, directLinked) {
+        serviceCalls += 1;
+        implementation(machine, directLinked);
+      },
+    },
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const at = (name) => linked.symbols.get(name).value;
+  const initialize = (program, selector, exponent, high, low) => {
+    program.reset();
+    program.machine.memory[at("selector")] = selector;
+    program.machine.memory[at("xs")] = selector & 1;
+    program.machine.memory[at("xe")] = exponent;
+    program.machine.memory[at("xmh")] = high;
+    program.machine.memory[at("xml")] = low;
+    for (const name of [
+      "xtmp", "srd0", "srd1", "srd2", "srd3", "sqrh", "sqrl", "sqmh",
+      "sqml", "sqcarry", "sqstep", "srm0", "srm1", "srm2", "srm3",
+    ]) program.machine.memory[at(name)] = 0x55555555;
+    program.machine.A = 11;
+    program.machine.B = 13;
+    program.machine.C = 17;
+    program.machine.D = 19;
+    program.machine.E = 23;
+    program.machine.X = 0x6661696c;
+    program.machine.depth = 0;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X, program.machine.depth, program.machine.halted,
+    ],
+    stack: [...program.machine.stack.subarray(0, program.machine.depth)],
+  });
+  const cases = [
+    [15309, 0x80000000, 0], [15309, 0xffffffff, -1],
+    [15360, 0x80000000, 0], [16382, 0x80000000, 0],
+    [16383, 0x80000000, 0], [16384, 0x80000000, 0],
+    [16384, 0xffffffff, -1], [17406, 0xffffffff, -1],
+  ];
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 128; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const high = random | 0x80000000;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    cases.push([15309 + (index % (17406 - 15309 + 1)), high, random]);
+  }
+
+  for (let index = 0; index < cases.length; index += 1) {
+    const [exponent, high, low] = cases[index];
+    const selector = index % 3;
+    for (const program of [fallback, direct, precompiled]) {
+      initialize(program, selector, exponent, high, low);
+      assert.equal(program.run(10_000).status, "halted");
+    }
+    assert.equal(fallback.machine.memory[at("continuation")], 10 * (selector + 1));
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+  }
+  assert.equal(serviceCalls, cases.length);
+
+  for (const label of ["indirectroot", "xrootcore"]) {
+    for (const program of [fallback, direct]) {
+      initialize(program, 0, 16384, 0xd413cccf, -411462895);
+      program.machine.pc = linked.labels.get(label);
+      assert.equal(program.run(10_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+  }
+  assert.equal(serviceCalls, cases.length);
+  assert.equal(direct.machine.memory[at("continuation")], 0);
+});
+
 test("static HUD lamp smoother service matches all shared Lino call paths", async () => {
   const padding = "0;".repeat(4_000);
   const source = `

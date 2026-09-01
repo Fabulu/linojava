@@ -40,6 +40,9 @@ function fixture() {
     "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
     "xua", "xub", "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1",
     "xup2", "xup3", "xutmp", "xumid", "xulo", "xuhi",
+    "XS", "XE", "XMH", "XML", "xtmp", "srd0", "srd1", "srd2", "srd3",
+    "sqrh", "sqrl", "sqmh", "sqml", "sqcarry", "sqstep",
+    "srm0", "srm1", "srm2", "srm3",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
     "FKNsIdentitySpill2t0", "FKNsIdentitySpill3t0", "FKNsIdentitySpill4t0",
     "FKNsIdentitySpillAllt0", "FKIsThereIdentityK1EM50", "FKProd4Spilledt0",
@@ -185,6 +188,126 @@ test("unsigned multiply service preserves exact shared Lino scratch state", () =
   assert.equal(machine.C, -123456789);
   assert.equal(machine.D, 0x76543210);
   assert.equal(machine.E, -987654321);
+  assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
+  assert.equal(machine.depth, 3);
+  assert.equal(machine.halted, false);
+  assert.equal(memory[canary], 0x13579bdf);
+  assert.equal(memory[canary + 1], -0x2468ace);
+});
+
+test("restoring-root service preserves exact shared Lino integer state", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const mask = 0xffffffffn;
+  const sqrtFloor = (value) => {
+    if (value < 2n) return value;
+    let root = 1n << BigInt((value.toString(2).length + 1) >> 1);
+    for (;;) {
+      const next = (root + value / root) >> 1n;
+      if (next >= root) return root;
+      root = next;
+    }
+  };
+  const expectedRoot = (exponent, high, low) => {
+    const mantissa = (BigInt(high >>> 0) << 32n) | BigInt(low >>> 0);
+    let unbiased = (exponent - 16383) | 0;
+    let radicand;
+    if ((unbiased & 1) !== 0) {
+      radicand = mantissa << 64n;
+      unbiased = (unbiased - 1) | 0;
+    } else {
+      radicand = mantissa << 63n;
+    }
+    const root = sqrtFloor(radicand);
+    const remainder = radicand - root * root;
+    const compatible = (root & 0xffffn) === 0n ? remainder - (1n << 32n) : remainder;
+    let rounded = root + (compatible < 0n || compatible > root ? 1n : 0n);
+    let output = rounded;
+    if (rounded === 1n << 64n) {
+      rounded = 0n;
+      output = 1n << 63n;
+      unbiased = (unbiased + 1) | 0;
+    }
+    const residual = BigInt.asUintN(96, compatible);
+    const base = root & ~1n;
+    const trial = (base << 1n) | 1n;
+    return {
+      exponent: ((unbiased / 2) | 0) + 16383,
+      temporary: unbiased,
+      outputHigh: Number((output >> 32n) & mask) | 0,
+      outputLow: Number(output & mask) | 0,
+      rootHigh: Number((rounded >> 32n) & mask) | 0,
+      rootLow: Number(rounded & mask) | 0,
+      remainder0: Number(residual & mask) | 0,
+      remainder1: Number((residual >> 32n) & mask) | 0,
+      remainder2: Number((residual >> 64n) & mask) | 0,
+      remainder3: compatible < 0n ? -1 : 0,
+      carry: Number((trial >> 64n) & mask) | 0,
+      trialHigh: Number((trial >> 32n) & mask) | 0,
+      trialLow: Number(trial & mask) | 0,
+    };
+  };
+
+  const canary = 1_900_000;
+  memory[canary] = 0x13579bdf;
+  memory[canary + 1] = -0x2468ace;
+  machine.stack = Int32Array.from([17, -23, 42, 99]);
+  machine.depth = 3;
+  machine.halted = false;
+  const invoke = (exponent, high, low, sign = 0) => {
+    memory[at("XS")] = sign;
+    memory[at("XE")] = exponent;
+    memory[at("XMH")] = high;
+    memory[at("XML")] = low;
+    for (const name of [
+      "xtmp", "srd0", "srd1", "srd2", "srd3", "sqrh", "sqrl",
+      "sqmh", "sqml", "sqcarry", "sqstep", "srm0", "srm1", "srm2", "srm3",
+    ]) memory[at(name)] = 0x55555555;
+    const expected = expectedRoot(exponent, high, low);
+
+    intrinsic[SERVICES.xRootCore](machine, linked);
+
+    assert.equal(memory[at("XS")], 0);
+    assert.equal(memory[at("XE")], expected.exponent);
+    assert.equal(memory[at("XMH")], expected.outputHigh);
+    assert.equal(memory[at("XML")], expected.outputLow);
+    assert.equal(memory[at("xtmp")], expected.temporary);
+    for (const name of ["srd0", "srd1", "srd2", "srd3"]) assert.equal(memory[at(name)], 0);
+    assert.equal(memory[at("sqrh")], expected.rootHigh);
+    assert.equal(memory[at("sqrl")], expected.rootLow);
+    assert.equal(memory[at("sqmh")], 0);
+    assert.equal(memory[at("sqml")], 0);
+    assert.equal(memory[at("sqcarry")], expected.carry);
+    assert.equal(memory[at("sqstep")], at("srd0") - 1);
+    assert.equal(memory[at("srm0")], expected.remainder0);
+    assert.equal(memory[at("srm1")], expected.remainder1);
+    assert.equal(memory[at("srm2")], expected.remainder2);
+    assert.equal(memory[at("srm3")], expected.remainder3);
+    assert.equal(machine.A, expected.exponent);
+    assert.equal(machine.C, expected.trialHigh);
+    assert.equal(machine.D, expected.trialLow);
+    assert.equal(machine.E, expected.remainder3);
+    assert.equal(machine.X, 0x646f6e65);
+  };
+
+  const edges = [
+    [15309, 0x80000000, 0], [15309, 0xffffffff, -1],
+    [15360, 0x80000000, 0], [16382, 0x80000000, 0],
+    [16383, 0x80000000, 0], [16384, 0x80000000, 0],
+    [16384, 0xffffffff, -1], [17406, 0xffffffff, -1],
+  ];
+  for (const [exponent, high, low] of edges) invoke(exponent, high, low);
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 4096; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const high = random | 0x80000000;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const low = random;
+    const exponent = 15309 + (index % (17406 - 15309 + 1));
+    invoke(exponent, high, low, index & 1);
+  }
+
   assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
   assert.equal(machine.depth, 3);
   assert.equal(machine.halted, false);
