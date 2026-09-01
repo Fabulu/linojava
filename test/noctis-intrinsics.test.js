@@ -17,7 +17,8 @@ function fixture() {
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
     "VHTmaski", "VHTcyclebase", "nw",
     "RADPT", "VHGNDblurpasses", "VHGNDblursize", "VHGNDblurp",
-    "VHGNDblurcount", "VHGNDblurval", "VHGNDmushinner",
+    "VHGNDblurcount", "VHGNDblurval", "VHGNDskycache", "VHGNDbgcachep",
+    "VHGNDbgcacheq", "VHGNDmushinner",
     "VHGNDmushcolmask", "VHGNDmushbase",
     "VHGNDmushoff",
     "VHTsmoothbase", "SPcpfrom", "SPcpto", "PVj", "SCcx", "SCdi",
@@ -137,6 +138,81 @@ test("surface blur service preserves the shared Lino loop", () => {
   assert.equal(machine.C, expected[count - 1 + 320] & 0xc0);
   assert.equal(machine.D, base + count - 1);
   assert.equal(machine.E, base + count - 1 + 320);
+});
+
+test("background-cache services preserve shared Lino forward-copy semantics", () => {
+  const count = 64_000;
+  const runCase = ({ service, cache, page }) => {
+    const intrinsic = createNoctisIntrinsics();
+    const { linked, machine, at } = fixture();
+    const memory = machine.memory;
+    linked.symbols.get(canonicalName("VHGNDskycache")).value = cache;
+    linked.symbols.get(canonicalName("nw")).value = page - 1_000;
+    linked.symbols.get(canonicalName("RADPT")).value = 1_000;
+    const restore = service === SERVICES.groundBackgroundCacheRestore;
+    const source = restore ? cache : page;
+    const destination = restore ? page : cache;
+    const first = Math.min(source, destination) - 1;
+    const last = Math.max(source, destination) + count + 1;
+    for (let index = first; index < last; index += 1) {
+      memory[index] = (Math.imul(index, 0x45d9f3b) ^ 0x80000000) | 0;
+    }
+    memory[first] = 0x12345678;
+    memory[last - 1] = -0x1234567;
+    const expected = memory.slice(first, last);
+    for (let index = 0; index < count; index += 1) {
+      expected[destination + index - first] = expected[source + index - first];
+    }
+    machine.A = 11;
+    machine.B = 13;
+    machine.C = 17;
+    machine.D = 19;
+    machine.E = 23;
+    machine.X = 29;
+    machine.stack = new Int32Array([31, 37, 41]);
+    machine.depth = 3;
+
+    intrinsic[service](machine, linked);
+
+    assert.deepEqual([...memory.subarray(first, last)], [...expected]);
+    assert.equal(memory[at("VHGNDbgcachep")], cache + count);
+    assert.equal(memory[at("VHGNDbgcacheq")], page + count);
+    assert.equal(memory[at("VHGNDbgcachecount")], 0);
+    assert.equal(machine.A, 0);
+    assert.equal(machine.B, 13);
+    assert.equal(machine.C, expected[source + count - 1 - first]);
+    assert.equal(machine.D, destination + count - 4);
+    assert.equal(machine.E, 23);
+    assert.equal(machine.X, 0x646f6e65);
+    assert.equal(machine.depth, 3);
+    assert.deepEqual([...machine.stack], [31, 37, 41]);
+  };
+
+  runCase({
+    service: SERVICES.groundBackgroundCacheSave,
+    cache: 100_000,
+    page: 300_000,
+  });
+  runCase({
+    service: SERVICES.groundBackgroundCacheRestore,
+    cache: 100_000,
+    page: 300_000,
+  });
+  runCase({
+    service: SERVICES.groundBackgroundCacheRestore,
+    cache: 500_000,
+    page: 500_003,
+  });
+  runCase({
+    service: SERVICES.groundBackgroundCacheRestore,
+    cache: 700_003,
+    page: 700_000,
+  });
+  runCase({
+    service: SERVICES.groundBackgroundCacheRestore,
+    cache: 900_000,
+    page: 900_000,
+  });
 });
 
 test("star-page mask service preserves the shared Lino loop", () => {
