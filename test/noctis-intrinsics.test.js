@@ -11,6 +11,7 @@ import {
 function fixture() {
   const names = [
     "UAFsrc", "UAFdst", "UAFwidth", "UAFheight", "UAFgap",
+    "L2L Region", "Backdrop Layer", "Primary Display",
     "VHGUIsrc", "VHGUIpal", "VHGUIdst", "VHGUIrow2", "VHGUIdstp",
     "VHGUIrow2p", "VHGUIgap", "VHGUIdw", "VHGUIdh", "VHGUIsy",
     "VHGUIyacc", "VHGUIy", "PGdi", "PGval", "SADPT", "VHTmaskbase",
@@ -170,6 +171,101 @@ test("star-page mask service preserves the shared Lino loop", () => {
   assert.equal(machine.C, expected[count - 1]);
   assert.equal(machine.D, 19);
   assert.equal(machine.E, 23);
+});
+
+test("fast area-copy service preserves shared Lino row and overlap semantics", () => {
+  const runCase = ({ rowWidth, rows, displayWidth, sourceBase, destinationBase }) => {
+    const intrinsic = createNoctisIntrinsics();
+    const { linked, machine, at } = fixture();
+    const memory = machine.memory;
+    const pointer = 50_000;
+    const left = 2;
+    const top = 1;
+    const right = left + rowWidth - 1;
+    const bottom = top + rows - 1;
+    linked.symbols.get(canonicalName("Backdrop Layer")).value = sourceBase;
+    linked.symbols.get(canonicalName("Primary Display")).value = destinationBase;
+    memory[at("L2L Region")] = pointer;
+    memory[at("Display Width")] = displayWidth;
+    memory.set([left, top, right, bottom], pointer);
+    const destinationStart = destinationBase + top * displayWidth + left;
+    const destinationEnd = destinationBase + (bottom + 1) * displayWidth + left;
+    memory.fill(0x123456, destinationStart - 1, destinationEnd + 1);
+    const expected = [];
+    for (let row = 0; row < rows; row += 1) {
+      const values = [];
+      for (let column = 0; column < rowWidth; column += 1) {
+        const pixel = (row * 101 + column * 37 + rowWidth * 11) | 0;
+        memory[sourceBase + (top + row) * displayWidth + left + column] = pixel;
+        values.push(pixel);
+      }
+      expected.push(values);
+    }
+    machine.A = 11;
+    machine.B = 13;
+    machine.C = 17;
+    machine.D = 19;
+    machine.E = 23;
+    machine.X = 0x13579bdf;
+    machine.stack = new Int32Array([29, 31, 37]);
+    machine.depth = 3;
+
+    intrinsic[SERVICES.uafCopyCommon](machine, linked);
+
+    for (let row = 0; row < rows; row += 1) {
+      const start = destinationBase + (top + row) * displayWidth + left;
+      assert.deepEqual([...memory.subarray(start, start + rowWidth)], expected[row]);
+      assert.equal(memory[start - 1], 0x123456);
+      assert.equal(memory[start + rowWidth], 0x123456);
+    }
+    assert.equal(machine.A, sourceBase + (bottom + 1) * displayWidth + left);
+    assert.equal(machine.B, destinationBase + (bottom + 1) * displayWidth + left);
+    assert.equal(machine.C, rowWidth);
+    assert.equal(machine.D, 0);
+    assert.equal(machine.E, pointer);
+    assert.equal(machine.X, 0x13579bdf);
+    assert.equal(machine.depth, 3);
+    assert.deepEqual([...machine.stack], [29, 31, 37]);
+  };
+
+  for (const rowWidth of [1, 3, 4, 5]) {
+    runCase({
+      rowWidth,
+      rows: 3,
+      displayWidth: rowWidth + 4,
+      sourceBase: 100_000,
+      destinationBase: 200_000,
+    });
+  }
+
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const pointer = 60_000;
+  const sourceBase = 300_000;
+  const destinationBase = sourceBase + 2;
+  const displayWidth = 8;
+  linked.symbols.get(canonicalName("Backdrop Layer")).value = sourceBase;
+  linked.symbols.get(canonicalName("Primary Display")).value = destinationBase;
+  memory[at("L2L Region")] = pointer;
+  memory[at("Display Width")] = displayWidth;
+  memory.set([0, 0, 4, 1], pointer);
+  for (let index = 0; index < 24; index += 1) memory[sourceBase + index] = index + 1;
+  const expected = [...memory.subarray(sourceBase, sourceBase + 24)];
+  for (let row = 0; row < 2; row += 1) {
+    for (let column = 0; column < 5; column += 1) {
+      expected[2 + row * displayWidth + column] = expected[row * displayWidth + column];
+    }
+  }
+
+  intrinsic[SERVICES.uafCopyCommon](machine, linked);
+
+  assert.deepEqual([...memory.subarray(sourceBase, sourceBase + 24)], expected);
+  assert.equal(machine.A, sourceBase + 2 * displayWidth);
+  assert.equal(machine.B, destinationBase + 2 * displayWidth);
+  assert.equal(machine.C, 5);
+  assert.equal(machine.D, 0);
+  assert.equal(machine.E, pointer);
 });
 
 test("Noctis integer and framebuffer intrinsics preserve the native kernels", () => {
