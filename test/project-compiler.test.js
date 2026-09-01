@@ -219,6 +219,216 @@ test("static unsigned multiply service matches its shared Lino fallback", async 
   assert.equal(serviceCalls, pairs.length);
 });
 
+test("static floating-point state transfers match all shared Lino call paths", async () => {
+  const services = [
+    ["XCopyXtoY", NOCTIS_SERVICES.xCopyXtoY],
+    ["XSaveR", NOCTIS_SERVICES.xSaveR],
+    ["XLoadR", NOCTIS_SERVICES.xLoadR],
+    ["XCopyRtoY", NOCTIS_SERVICES.xCopyRtoY],
+    ["XSaveZ", NOCTIS_SERVICES.xSaveZ],
+    ["XLoadZ", NOCTIS_SERVICES.xLoadZ],
+    ["XSaveU", NOCTIS_SERVICES.xSaveU],
+    ["XLoadU", NOCTIS_SERVICES.xLoadU],
+    ["XCopyUtoY", NOCTIS_SERVICES.xCopyUtoY],
+    ["XSaveP", NOCTIS_SERVICES.xSaveP],
+    ["XLoadP", NOCTIS_SERVICES.xLoadP],
+    ["XCopyPtoY", NOCTIS_SERVICES.xCopyPtoY],
+    ["XSaveB", NOCTIS_SERVICES.xSaveB],
+    ["XCopyBtoY", NOCTIS_SERVICES.xCopyBtoY],
+    ["XSaveA", NOCTIS_SERVICES.xSaveA],
+    ["XLoadA", NOCTIS_SERVICES.xLoadA],
+    ["XCopyAtoY", NOCTIS_SERVICES.xCopyAtoY],
+    ["XSaveD", NOCTIS_SERVICES.xSaveD],
+    ["XLoadD", NOCTIS_SERVICES.xLoadD],
+    ["XCopyDtoY", NOCTIS_SERVICES.xCopyDtoY],
+    ["XStoreTabX", NOCTIS_SERVICES.xStoreTabX],
+    ["XLoadTabX", NOCTIS_SERVICES.xLoadTabX],
+    ["XLoadTabY", NOCTIS_SERVICES.xLoadTabY],
+  ];
+  const callers = services.map(([label], index) => `
+    "Call ${index}"
+      A = 111; A -->; A = 222; A -->; => ${label};
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = ${index + 1}; end;
+  `).join("\n");
+  const source = `
+    "variables"
+      XS = 0; XE = 0; XMH = 0; XML = 0;
+      YS = 0; YE = 0; YMH = 0; YML = 0;
+      TRS = 0; TRE = 0; TRMH = 0; TRML = 0;
+      TZS = 0; TZE = 0; TZMH = 0; TZML = 0;
+      TUS = 0; TUE = 0; TUMH = 0; TUML = 0;
+      TPS = 0; TPE = 0; TPMH = 0; TPML = 0;
+      TBS = 0; TBE = 0; TBMH = 0; TBML = 0;
+      TAS = 0; TAE = 0; TAMH = 0; TAML = 0;
+      TDS = 0; TDE = 0; TDMH = 0; TDML = 0;
+      xttable = 0; xtindex = 0; continuation = 0;
+      stack first = 0; stack second = 0;
+      canary left = 0; canary right = 0;
+      fixed pointer = XSaveR; table pointer = XLoadTabY;
+    "workspace" table data = 16;
+    "programme" end;
+    ${callers}
+    "Indirect fixed"
+      A = 111; A -->; A = 222; A -->; => [fixed pointer];
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = 101; end;
+    "Indirect table"
+      A = 111; A -->; A = 222; A -->; => [table pointer];
+      <-- D; <-- C; [stack first] = C; [stack second] = D;
+      [continuation] = 102; end;
+    "XCopyXtoY"
+      [YS] = [XS]; [YE] = [XE]; [YMH] = [XMH]; [YML] = [XML]; end;
+    "XSaveR"
+      [TRS] = [XS]; [TRE] = [XE]; [TRMH] = [XMH]; [TRML] = [XML]; end;
+    "XLoadR"
+      [XS] = [TRS]; [XE] = [TRE]; [XMH] = [TRMH]; [XML] = [TRML]; end;
+    "XCopyRtoY"
+      [YS] = [TRS]; [YE] = [TRE]; [YMH] = [TRMH]; [YML] = [TRML]; end;
+    "XSaveZ"
+      [TZS] = [XS]; [TZE] = [XE]; [TZMH] = [XMH]; [TZML] = [XML]; end;
+    "XLoadZ"
+      [XS] = [TZS]; [XE] = [TZE]; [XMH] = [TZMH]; [XML] = [TZML]; end;
+    "XSaveU"
+      [TUS] = [XS]; [TUE] = [XE]; [TUMH] = [XMH]; [TUML] = [XML]; end;
+    "XLoadU"
+      [XS] = [TUS]; [XE] = [TUE]; [XMH] = [TUMH]; [XML] = [TUML]; end;
+    "XCopyUtoY"
+      [YS] = [TUS]; [YE] = [TUE]; [YMH] = [TUMH]; [YML] = [TUML]; end;
+    "XSaveP"
+      [TPS] = [XS]; [TPE] = [XE]; [TPMH] = [XMH]; [TPML] = [XML]; end;
+    "XLoadP"
+      [XS] = [TPS]; [XE] = [TPE]; [XMH] = [TPMH]; [XML] = [TPML]; end;
+    "XCopyPtoY"
+      [YS] = [TPS]; [YE] = [TPE]; [YMH] = [TPMH]; [YML] = [TPML]; end;
+    "XSaveB"
+      [TBS] = [XS]; [TBE] = [XE]; [TBMH] = [XMH]; [TBML] = [XML]; end;
+    "XCopyBtoY"
+      [YS] = [TBS]; [YE] = [TBE]; [YMH] = [TBMH]; [YML] = [TBML]; end;
+    "XSaveA"
+      [TAS] = [XS]; [TAE] = [XE]; [TAMH] = [XMH]; [TAML] = [XML]; end;
+    "XLoadA"
+      [XS] = [TAS]; [XE] = [TAE]; [XMH] = [TAMH]; [XML] = [TAML]; end;
+    "XCopyAtoY"
+      [YS] = [TAS]; [YE] = [TAE]; [YMH] = [TAMH]; [YML] = [TAML]; end;
+    "XSaveD"
+      [TDS] = [XS]; [TDE] = [XE]; [TDMH] = [XMH]; [TDML] = [XML]; end;
+    "XLoadD"
+      [XS] = [TDS]; [XE] = [TDE]; [XMH] = [TDMH]; [XML] = [TDML]; end;
+    "XCopyDtoY"
+      [YS] = [TDS]; [YE] = [TDE]; [YMH] = [TDMH]; [YML] = [TDML]; end;
+    "XStoreTabX"
+      E = [xttable]; A = [xtindex]; A * 4; E + A;
+      [E] = [XS]; [E plus 1] = [XE]; [E plus 2] = [XMH]; [E plus 3] = [XML]; end;
+    "XLoadTabX"
+      E = [xttable]; A = [xtindex]; A * 4; E + A;
+      [XS] = [E]; [XE] = [E plus 1]; [XMH] = [E plus 2]; [XML] = [E plus 3]; end;
+    "XLoadTabY"
+      E = [xttable]; A = [xtindex]; A * 4; E + A;
+      [YS] = [E]; [YE] = [E plus 1]; [YMH] = [E plus 2]; [YML] = [E plus 3]; end;
+  `;
+  const project = await loadProject("state-transfer-services.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const intrinsics = Object.fromEntries(services.map(([, id]) => [id, allIntrinsics[id]]));
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const directIntrinsics = Object.fromEntries(services.map(([, id]) => [id, (machine, directLinked) => {
+    serviceCalls += 1;
+    allIntrinsics[id](machine, directLinked);
+  }]));
+  const direct = compileLinkedProject(linked, {}, { regionSize: 256, intrinsics: directIntrinsics });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const programs = [fallback, direct, precompiled];
+  const at = (name) => linked.symbols.get(name).value;
+  const imageNames = [
+    "xs", "xe", "xmh", "xml", "ys", "ye", "ymh", "yml",
+    "trs", "tre", "trmh", "trml", "tzs", "tze", "tzmh", "tzml",
+    "tus", "tue", "tumh", "tuml", "tps", "tpe", "tpmh", "tpml",
+    "tbs", "tbe", "tbmh", "tbml", "tas", "tae", "tamh", "taml",
+    "tds", "tde", "tdmh", "tdml",
+  ];
+  const initialize = (program) => {
+    program.reset();
+    const memory = program.machine.memory;
+    for (let index = 0; index < imageNames.length; index += 1) {
+      memory[at(imageNames[index])] = Math.imul(index + 1, 0x13579bdf) | 0;
+    }
+    memory[at("xttable")] = at("tabledata");
+    memory[at("xtindex")] = 2;
+    for (let index = 0; index < 16; index += 1) {
+      memory[at("tabledata") + index] = Math.imul(index + 7, 0x1020304) | 0;
+    }
+    memory[at("continuation")] = 0;
+    memory[at("stackfirst")] = 0;
+    memory[at("stacksecond")] = 0;
+    memory[at("canaryleft")] = 0x2468ace;
+    memory[at("canaryright")] = -0x13579bdf;
+    program.machine.A = 11;
+    program.machine.B = 13;
+    program.machine.C = 17;
+    program.machine.D = 19;
+    program.machine.E = 23;
+    program.machine.X = 0x6661696c;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X, program.machine.depth, program.machine.halted,
+    ],
+    stack: [...program.machine.stack.subarray(0, program.machine.depth)],
+  });
+
+  for (let index = 0; index < services.length; index += 1) {
+    for (const program of programs) {
+      initialize(program);
+      program.machine.pc = linked.labels.get(`call${index}`);
+      assert.equal(program.run(1_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+    assert.equal(fallback.machine.memory[at("continuation")], index + 1);
+    assert.equal(fallback.machine.memory[at("stackfirst")], 111);
+    assert.equal(fallback.machine.memory[at("stacksecond")], 222);
+  }
+  assert.equal(serviceCalls, services.length);
+
+  for (const label of ["indirectfixed", "indirecttable", "xsaver", "xloadtaby"]) {
+    for (const program of programs) {
+      initialize(program);
+      program.machine.pc = linked.labels.get(label);
+      assert.equal(program.run(1_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+  }
+  assert.equal(serviceCalls, services.length);
+
+  for (const label of ["xsaver", "xloadtaby"]) {
+    const handle = linked.labels.get(label) + 1;
+    for (const program of programs) {
+      initialize(program);
+      const outerPc = program.machine.pc;
+      assert.ok(program.machine.callCode(handle, 1_000) > 0);
+      assert.equal(program.machine.pc, outerPc);
+    }
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+  }
+  assert.equal(serviceCalls, services.length);
+});
+
 test("static restoring-root service matches all shared Lino call paths", async () => {
   const source = `
     "constants" XBIAS = 16383; XM16 = 65535;
