@@ -50,6 +50,26 @@ function updateDestination(operand, operation) {
   throw new SyntaxError("Lino destination is not writable");
 }
 
+function binary64Address(operand) {
+  if (operand.kind !== "memory") throw new SyntaxError("Lino binary64 operand must be memory");
+  return `((${expression(operand.address)}) >>> 0)`;
+}
+
+function binary64Instruction(instruction) {
+  const operator = instruction.operator;
+  if (operator === "+:" || operator === "-:" || operator === "*:" || operator === "/:") {
+    const operation = { "+:": "+", "-:": "-", "*:": "*", "/:": "/" }[operator];
+    return `q=${binary64Address(instruction.destination)};u=${binary64Address(instruction.source)};f64w(q,f64r(q)${operation}f64r(u));`;
+  }
+  if (operator === "=:") {
+    return `q=${binary64Address(instruction.source)};${destination(instruction.destination, "f64toi(f64r(q))")}`;
+  }
+  if (operator === ":=") {
+    return `u=${expression(instruction.source)};q=${binary64Address(instruction.destination)};f64w(q,u|0);`;
+  }
+  throw new SyntaxError(`Cannot emit Lino binary64 operator ${operator}`);
+}
+
 function destinationReference(operand, name) {
   if (operand.kind === "register") {
     return { setup: "", read: operand.name, write: (value) => `${operand.name} = (${value}) | 0;` };
@@ -69,6 +89,13 @@ function destinationReference(operand, name) {
     };
   }
   throw new SyntaxError("Lino swap operand is not writable");
+}
+
+function splitMultiplyInstruction(instruction) {
+  const left = destinationReference(instruction.destination, "multiplyLeft");
+  const right = destinationReference(instruction.source, "multiplyRight");
+  const high = instruction.operator === "*%'" ? "umulh(u,v)" : "imulh(u,v)";
+  return `${left.setup} ${right.setup} u=${left.read};v=${right.read};q=Math.imul(u,v);${left.write("q")}${right.write(high)}`;
 }
 
 function integerBinary(operator, left, right) {
@@ -131,7 +158,16 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceIn
     case "increment": code = updateDestination(instruction.destination, (left) => `((${left}) + 1)`); break;
     case "decrement": code = updateDestination(instruction.destination, (left) => `((${left}) - 1)`); break;
     case "unary": code = updateDestination(instruction.destination, (left) => instruction.operator === "!" ? `~(${left})` : `-(${left})`); break;
-    case "binary": code = updateDestination(instruction.destination, (left) => integerBinary(instruction.operator, left, expression(instruction.source))); break;
+    case "binary":
+      if (instruction.operator.endsWith(":") || instruction.operator === ":=") {
+        code = binary64Instruction(instruction);
+      } else if (instruction.operator === "*%" || instruction.operator === "*%'") {
+        code = splitMultiplyInstruction(instruction);
+      } else {
+        code = updateDestination(instruction.destination, (left) => integerBinary(instruction.operator, left, expression(instruction.source)));
+      }
+      break;
+    case "binary64-narrow": code = `q=${binary64Address(instruction.destination)};f64w(q,Math.fround(f64r(q)));`; break;
     case "swap": {
       const left = destinationReference(instruction.destination, "swapLeft");
       const right = destinationReference(instruction.source, "swapRight");
@@ -235,9 +271,12 @@ export function emitRunner(linked, options = {}) {
     const urem = (a,b) => { b >>>= 0; if (b === 0) throw new RangeError("Lino division by zero"); return (((a>>>0)%b)>>>0)|0; };
     const rol = (a,b) => { const n=(b&31); return n===0?(a|0):((a<<n)|(a>>>(32-n))); };
     const ror = (a,b) => { const n=(b&31); return n===0?(a|0):((a>>>n)|(a<<(32-n))); };
+    const umulh = (a,b) => { a>>>=0;b>>>=0;const p0=(a&65535)*(b&65535),p1=(a>>>16)*(b&65535)+(p0>>>16),p2=(a&65535)*(b>>>16)+(p1&65535);return ((a>>>16)*(b>>>16)+(p1>>>16)+(p2>>>16))|0; };
+    const imulh = (a,b) => (umulh(a,b)-(a<0?(b>>>0):0)-(b<0?(a>>>0):0))|0;
     const itof = (a) => { ff[0]=Math.fround(a|0); return fi[0]|0; };
     const fread = (a) => { fi[0]=a|0; return ff[0]; };
     const ftoi = (a) => { fi[0]=a|0; const x=ff[0]; const f=Math.floor(x), r=x-f; return (r<0.5?f:r>0.5?f+1:((f&1)?f+1:f))|0; };
+    const f64toi = (x) => { if(!Number.isFinite(x))return -2147483648;const f=Math.floor(x),r=x-f,n=r<0.5?f:r>0.5?f+1:((f%2)!==0?f+1:f);return n<-2147483648||n>2147483647?-2147483648:n|0; };
     const fop = (a,b,o) => { fi[0]=a|0; const x=ff[0]; fi[0]=b|0; const y=ff[0]; ff[0]=Math.fround(o===0?x+y:o===1?x-y:o===2?x*y:x/y); return fi[0]|0; };
     return function run(machine, maxInstructions = 10000000) {
       let m=machine.memory, md=machine.noctisDataView;

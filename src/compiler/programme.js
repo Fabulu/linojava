@@ -2,7 +2,7 @@ import { canonicalName } from "./lexer.js";
 
 const TERMINATORS = new Set(["end", "fail", "leave", "isocall", "nop"]);
 const BINARY_OPERATORS = [
-  "++", "--", "**", "//", ",=", "=,", "<>", "<<", ">>", "<@", "@>",
+  "++", "--", "**", "//", ",=", "=,", "+:", "-:", "*:", "/:", "=:", ":=", "*%'", "*%", "<>", "<<", ">>", "<@", "@>",
   "'*", "'/", "'%",
   "+", "-", "*", "/", "%", "&", "|", "#", "<", ">",
 ];
@@ -51,6 +51,11 @@ function leadingOperand(text, item) {
 }
 
 function parseMutation(text, item) {
+  if (text.startsWith("~:")) {
+    const [destination, rest] = leadingOperand(text.slice(2), item);
+    if (rest) throw location(item, "Unexpected text after binary64 narrow");
+    return { op: "binary64-narrow", destination };
+  }
   if (text.startsWith("!")) {
     const [destination, rest] = leadingOperand(text.slice(1), item);
     if (rest) throw location(item, "Unexpected text after unary NOT");

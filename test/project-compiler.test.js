@@ -138,6 +138,141 @@ test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript
   assert.equal(program.machine.B, -2);
 });
 
+test("split multiply writes exact low and high halves", async () => {
+  const signedSource = '"variables" left = 0; right = 0; "programme" [left] *% [right]; end;';
+  const signed = await compileProject("split-signed.lino", { resolveSource() { return signedSource; } });
+  const signedLeft = signed.linked.symbols.get("left").value;
+  const signedRight = signed.linked.symbols.get("right").value;
+  signed.machine.memory[signedLeft] = -123456789;
+  signed.machine.memory[signedRight] = 987654321;
+  signed.run(5);
+  const signedProduct = BigInt(-123456789) * BigInt(987654321);
+  assert.equal(signed.machine.memory[signedLeft], Number(BigInt.asIntN(32, signedProduct)));
+  assert.equal(signed.machine.memory[signedRight], Number(BigInt.asIntN(32, signedProduct >> 32n)));
+
+  const unsignedSource = `
+    "variables" left = 0; right = 0;
+    "programme"
+      A = right;
+      [left] *%' [A];
+      end;
+  `;
+  const unsigned = await compileProject("split-unsigned.lino", { resolveSource() { return unsignedSource; } });
+  const unsignedLeft = unsigned.linked.symbols.get("left").value;
+  const unsignedRight = unsigned.linked.symbols.get("right").value;
+  unsigned.machine.memory[unsignedLeft] = -1;
+  unsigned.machine.memory[unsignedRight] = -1;
+  unsigned.run(5);
+  assert.equal(unsigned.machine.memory[unsignedLeft], 1);
+  assert.equal(unsigned.machine.memory[unsignedRight], -2);
+});
+
+test("binary64 arithmetic supports direct and indirect paired-unit operands", async () => {
+  const cases = [
+    ["+:", 1.5, 2.25, 3.75],
+    ["-:", -0, 0, -0],
+    ["*:", Number.MAX_VALUE, 2, Infinity],
+    ["/:", 1, -Infinity, -0],
+  ];
+  for (const [operator, left, right, expected] of cases) {
+    const source = `
+      "variables" left = 0; 0; right = 0; 0;
+      "programme"
+        A = right;
+        [left] ${operator} [A];
+        end;
+    `;
+    const program = await compileProject("binary64.lino", { resolveSource() { return source; } });
+    const view = new DataView(program.machine.memory.buffer);
+    const leftAddress = program.linked.symbols.get("left").value * 4;
+    const rightAddress = program.linked.symbols.get("right").value * 4;
+    view.setFloat64(leftAddress, left, true);
+    view.setFloat64(rightAddress, right, true);
+    assert.equal(program.run(10).status, "halted");
+    assert.ok(Object.is(view.getFloat64(leftAddress, true), expected));
+  }
+
+  const source = '"variables" left = 0; 0; right = 0; 0; "programme" [left] *: [right]; end;';
+  const program = await compileProject("binary64-nan.lino", { resolveSource() { return source; } });
+  const view = new DataView(program.machine.memory.buffer);
+  view.setFloat64(program.linked.symbols.get("left").value * 4, 0, true);
+  view.setFloat64(program.linked.symbols.get("right").value * 4, Infinity, true);
+  program.run(5);
+  assert.ok(Number.isNaN(view.getFloat64(program.linked.symbols.get("left").value * 4, true)));
+});
+
+test("binary64 conversion and narrowing preserve Lino edge semantics", async () => {
+  const conversionSource = `
+    "variables" wide = 0; 0; integer = 0;
+    "programme"
+      [integer] =: [wide];
+      end;
+  `;
+  const conversions = [[2.5, 2], [3.5, 4], [-1.5, -2], [Infinity, -2147483648], [2147483647.5, -2147483648]];
+  for (const [value, expected] of conversions) {
+    const program = await compileProject("binary64-to-int.lino", { resolveSource() { return conversionSource; } });
+    const view = new DataView(program.machine.memory.buffer);
+    view.setFloat64(program.linked.symbols.get("wide").value * 4, value, true);
+    program.run(5);
+    assert.equal(program.machine.memory[program.linked.symbols.get("integer").value], expected);
+  }
+
+  const wideningSource = `
+    "variables" wide = 0; 0; integer = 0;
+    "programme"
+      [wide] := [integer];
+      end;
+  `;
+  for (const value of [-2147483648, 2147483647]) {
+    const program = await compileProject("int-to-binary64.lino", { resolveSource() { return wideningSource; } });
+    const view = new DataView(program.machine.memory.buffer);
+    program.machine.memory[program.linked.symbols.get("integer").value] = value;
+    program.run(5);
+    assert.equal(view.getFloat64(program.linked.symbols.get("wide").value * 4, true), value);
+  }
+
+  const narrowSource = '"variables" wide = 0; 0; "programme" ~: [wide]; end;';
+  for (const value of [1 + 2 ** -24, -0, Infinity]) {
+    const program = await compileProject("binary64-narrow.lino", { resolveSource() { return narrowSource; } });
+    const view = new DataView(program.machine.memory.buffer);
+    const address = program.linked.symbols.get("wide").value * 4;
+    view.setFloat64(address, value, true);
+    program.run(5);
+    assert.ok(Object.is(view.getFloat64(address, true), Math.fround(value)));
+  }
+});
+
+test("static runners execute binary64 instructions identically", async () => {
+  const source = `
+    "variables" left = 0; 0; right = 0; 0; result = 0;
+    "programme"
+      [left] *: [right];
+      [result] =: [left];
+      end;
+  `;
+  const project = await loadProject("binary64-static.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const moduleSource = emitStaticRunnerModule(linked, {}, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const dynamic = compileLinkedProject(linked, {}, { regionSize: 256 });
+  const precompiled = compileLinkedProject(linked, {}, {
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  for (const program of [dynamic, precompiled]) {
+    const view = new DataView(program.machine.memory.buffer);
+    view.setFloat64(linked.symbols.get("left").value * 4, 6.5, true);
+    view.setFloat64(linked.symbols.get("right").value * 4, 4, true);
+  }
+  assert.deepEqual(precompiled.run(10), dynamic.run(10));
+  assert.deepEqual(precompiled.machine.memory, dynamic.machine.memory);
+  assert.equal(dynamic.machine.memory[linked.symbols.get("result").value], 26);
+});
+
 test("native fragments require explicit portable intrinsic implementations", async () => {
   const source = '"programme" { DE AD BE EF } ; end;';
   const project = await loadProject("native.lino", { resolveSource() { return source; } });

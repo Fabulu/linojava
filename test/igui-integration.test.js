@@ -50,7 +50,7 @@ test("unmodified iGUI reaches its first real RETRACE", async (context) => {
   const linked = linkProject(await loadProject(entry, resolvers));
   assert.deepEqual(
     { instructions: linked.instructions.length, labels: linked.labels.size, unresolved: linked.unresolved.length },
-    { instructions: 4619, labels: 715, unresolved: 0 },
+    { instructions: 4619, labels: 716, unresolved: 0 },
   );
   assert.deepEqual(
     { initialized: linked.memoryLayout.initializedUnits, kernel: linked.memoryLayout.kernelBase, app: linked.memoryLayout.appData, ram: linked.memoryLayout.ramTop },
