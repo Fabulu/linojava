@@ -237,6 +237,8 @@ const SERVICE_IDS = Object.freeze({
   uafCopyCommon: "service:uafcopycommon",
   xMul32u: "service:xmul32u",
   xRootCore: "service:xrootcore",
+  xAddCore: "service:xaddcore",
+  xSubCore: "service:xsubcore",
   compareFloat64: "service:fcmp",
   spaceClear: "service:vhgspaceclear",
   interiorSmooth64: "service:vhginteriorsmooth64",
@@ -346,6 +348,7 @@ const ekeyAddressCaches = new WeakMap();
 const surfaceBulkAddressCaches = new WeakMap();
 const xMul32uAddressCaches = new WeakMap();
 const xRootCoreAddressCaches = new WeakMap();
+const xAddSubCoreAddressCaches = new WeakMap();
 const paletteShadeAddressCaches = new WeakMap();
 const paletteTavolaAddressCaches = new WeakMap();
 const groundRoundHillAddressCaches = new WeakMap();
@@ -1802,6 +1805,237 @@ function xRootCoreInline(linked) {
     m[${p.mantissaHigh}]=xrOutputHigh;m[${p.mantissaLow}]=xrOutputLow;m[${p.exponent}]=xrExponent;m[${p.sign}]=0;
     A=xrExponent;B=xrB;C=xrC;D=xrD;E=xrE;X=${LINO_DONE};
   }`;
+}
+
+function xAddSubCoreAddresses(linked) {
+  let cached = xAddSubCoreAddressCaches.get(linked);
+  if (cached) return cached;
+  cached = Object.fromEntries([
+    "XS", "XE", "XMH", "XML", "YS", "YE", "YMH", "YML",
+    "xash", "xasl", "xasx", "xbsh", "xbsl", "xbsx", "xssh", "xssl", "xssx",
+    "xase", "xbse", "xasd", "xass", "xbss", "xaso", "xasw", "xasb", "xasbit",
+  ].map((name) => [name, address(linked, name)]));
+  xAddSubCoreAddressCaches.set(linked, cached);
+  return cached;
+}
+
+function xAddSubCore(machine, linked, subtract) {
+  const m = machine.memory;
+  const p = xAddSubCoreAddresses(linked);
+  let XS = m[p.XS] | 0;
+  let XE = m[p.XE] | 0;
+  let XMH = m[p.XMH] | 0;
+  let XML = m[p.XML] | 0;
+  let xaso = subtract ? 1 : 0;
+  let xass = XS;
+  let xbss = (xaso ^ m[p.YS]) | 0;
+  let xase = XE;
+  let xbse = m[p.YE] | 0;
+  let xash = XMH;
+  let xasl = XML;
+  let xbsh = m[p.YMH] | 0;
+  let xbsl = m[p.YML] | 0;
+  let xasx = m[p.xasx] | 0;
+  let xbsx = m[p.xbsx] | 0;
+  let xssh = m[p.xssh] | 0;
+  let xssl = m[p.xssl] | 0;
+  let xssx = m[p.xssx] | 0;
+  let xasd = m[p.xasd] | 0;
+  let xasw = m[p.xasw] | 0;
+  let xasb = m[p.xasb] | 0;
+  let xasbit = m[p.xasbit] | 0;
+
+  let pack = false;
+  if (xase === 0) {
+    if (xbse !== 0) {
+      XS = xbss; XE = xbse; XMH = xbsh; XML = xbsl;
+    } else if (xass === xbss) {
+      XS = xass; XE = 0; XMH = 0; XML = 0;
+    } else {
+      XS = 0; XE = 0; XMH = 0; XML = 0;
+    }
+  } else if (xbse === 0) {
+    XS = xass; XE = xase; XMH = xash; XML = xasl;
+  } else {
+    const swap = (xase >>> 0) < (xbse >>> 0)
+      || (xase === xbse && ((xash >>> 0) < (xbsh >>> 0)
+        || (xash === xbsh && (xasl >>> 0) < (xbsl >>> 0))));
+    if (swap) {
+      [xase, xbse] = [xbse, xase];
+      [xass, xbss] = [xbss, xass];
+      [xash, xbsh] = [xbsh, xash];
+      [xasl, xbsl] = [xbsl, xasl];
+    }
+    xasx = 0;
+    xbsx = 0;
+    xasd = (xase - xbse) | 0;
+    if (xasd > 67) {
+      xbsh = 0; xbsl = 0; xbsx = 1;
+    } else {
+      while (xasd !== 0) {
+        if (xasd > 31) {
+          xasbit = xbsx;
+          xasw = xbsl;
+          xssh = xbsh;
+          xbsl = xbsh;
+          xbsh = 0;
+          xbsx = xasw >>> 29;
+          if (((xasw & 0x1fffffff) | xasbit) !== 0) xbsx |= 1;
+          xasd = (xasd - 32) | 0;
+        } else if ((xasd & 16) !== 0) {
+          xasbit = xbsx;
+          xasw = xbsl;
+          xssh = xbsh;
+          xbsh = xssh >>> 16;
+          xbsl = ((xasw >>> 16) | (xssh << 16)) | 0;
+          xbsx = (xasw >>> 13) & 7;
+          if (((xasw & 0x1fff) | xasbit) !== 0) xbsx |= 1;
+          xasd = (xasd - 16) | 0;
+        } else if ((xasd & 8) !== 0) {
+          xasbit = xbsx;
+          xasw = xbsl;
+          xssh = xbsh;
+          xbsh = xssh >>> 8;
+          xbsl = ((xasw >>> 8) | (xssh << 24)) | 0;
+          xbsx = (xasw >>> 5) & 7;
+          if (((xasw & 0x1f) | xasbit) !== 0) xbsx |= 1;
+          xasd = (xasd - 8) | 0;
+        } else if ((xasd & 4) !== 0) {
+          xasbit = xbsx;
+          xasw = xbsl;
+          xssh = xbsh;
+          xbsh = xssh >>> 4;
+          xbsl = ((xasw >>> 4) | (xssh << 28)) | 0;
+          xbsx = (xasw >>> 1) & 7;
+          if (((xasw & 1) | xasbit) !== 0) xbsx |= 1;
+          xasd = (xasd - 4) | 0;
+        } else if ((xasd & 2) !== 0) {
+          xasbit = xbsx;
+          xasw = xbsl;
+          xssh = xbsh;
+          xbsh = xssh >>> 2;
+          xbsl = ((xasw >>> 2) | (xssh << 30)) | 0;
+          xbsx = ((xasbit >>> 2) | ((xasw & 3) << 1)) | 0;
+          if ((xasbit & 3) !== 0) xbsx |= 1;
+          xasd = (xasd - 2) | 0;
+        } else if ((xasd & 1) !== 0) {
+          xasbit = xbsx;
+          xasw = xbsl;
+          xssh = xbsh;
+          xbsh = xssh >>> 1;
+          xbsl = ((xasw >>> 1) | (xssh << 31)) | 0;
+          xbsx = ((xasbit >>> 1) | ((xasw & 1) << 2)) | 0;
+          if ((xasbit & 1) !== 0) xbsx |= 1;
+          xasd = 0;
+        } else {
+          break;
+        }
+      }
+    }
+
+    if (xass === xbss) {
+      xssx = (xasx + xbsx) | 0;
+      xasbit = xssx < 8 ? 0 : 1;
+      xssl = (xasl + xbsl) | 0;
+      xasb = (xssl >>> 0) >= (xbsl >>> 0) ? 0 : 1;
+      if (xasbit !== 0) {
+        xssl = (xssl + 1) | 0;
+        if (xssl === 0) xasb = 1;
+      }
+      xssh = (xash + xbsh) | 0;
+      xasw = (xssh >>> 0) >= (xbsh >>> 0) ? 0 : 1;
+      if (xasb !== 0) {
+        xssh = (xssh + 1) | 0;
+        if (xssh === 0) xasw = 1;
+      }
+      xasb = xasw;
+      if (xasb !== 0) {
+        xasbit = xssx & 1;
+        xssx >>>= 1;
+        xssx = ((xssl & 1) << 2) | xssx;
+        xssl = ((xssl >>> 1) | (xssh << 31)) | 0;
+        xssh = ((xssh >>> 1) | (xasb << 31)) | 0;
+        if (xasbit !== 0) xssx |= 1;
+        xase = (xase + 1) | 0;
+      }
+      pack = true;
+    } else {
+      xasb = (xasx >>> 0) >= (xbsx >>> 0) ? 0 : 1;
+      xssx = (xasx - xbsx) | 0;
+      xasbit = (xasl >>> 0) >= (xbsl >>> 0) ? 0 : 1;
+      xssl = (xasl - xbsl) | 0;
+      if (xasb !== 0) {
+        if (xssl === 0) {
+          xssl = -1;
+          xasbit = 1;
+        } else {
+          xssl = (xssl - 1) | 0;
+        }
+      }
+      xasb = (xash >>> 0) >= (xbsh >>> 0) ? 0 : 1;
+      xssh = (xash - xbsh) | 0;
+      if (xasbit !== 0) {
+        if (xssh === 0) {
+          xssh = -1;
+          xasb = 1;
+        } else {
+          xssh = (xssh - 1) | 0;
+        }
+      }
+      if ((xssh | xssl | xssx) === 0) {
+        XS = 0; XE = 0; XMH = 0; XML = 0;
+      } else {
+        while ((xssh & 0x80000000) === 0) {
+          xasbit = (xssx >>> 2) & 1;
+          xasw = (xssl >>> 31) & 1;
+          xssx = (xssx << 1) & 7;
+          xssl = ((xssl << 1) | xasbit) | 0;
+          xssh = ((xssh << 1) | xasw) | 0;
+          xase = (xase - 1) | 0;
+          if (xase <= 0) {
+            XS = 0; XE = 0; XMH = 0; XML = 0;
+            break;
+          }
+        }
+        if (xase > 0) pack = true;
+      }
+    }
+
+    if (pack) {
+      XMH = xssh;
+      XML = xssl;
+      if ((xssx & 4) !== 0 && ((xssx & 3) !== 0 || (XML & 1) !== 0)) {
+        XML = (XML + 1) | 0;
+        if (XML === 0) {
+          XMH = (XMH + 1) | 0;
+          if (XMH === 0) {
+            XMH = 0x80000000 | 0;
+            XML = 0;
+            xase = (xase + 1) | 0;
+          }
+        }
+      }
+      XS = xass;
+      XE = xase;
+    }
+  }
+
+  m[p.XS] = XS; m[p.XE] = XE; m[p.XMH] = XMH; m[p.XML] = XML;
+  m[p.xash] = xash; m[p.xasl] = xasl; m[p.xasx] = xasx;
+  m[p.xbsh] = xbsh; m[p.xbsl] = xbsl; m[p.xbsx] = xbsx;
+  m[p.xssh] = xssh; m[p.xssl] = xssl; m[p.xssx] = xssx;
+  m[p.xase] = xase; m[p.xbse] = xbse; m[p.xasd] = xasd;
+  m[p.xass] = xass; m[p.xbss] = xbss; m[p.xaso] = xaso;
+  m[p.xasw] = xasw; m[p.xasb] = xasb; m[p.xasbit] = xasbit;
+  machine.X = LINO_DONE;
+}
+
+function xAddCore(machine, linked) {
+  xAddSubCore(machine, linked, false);
+}
+
+function xSubCore(machine, linked) {
+  xAddSubCore(machine, linked, true);
 }
 
 function multiplyUnsigned(machine) {
@@ -14058,6 +14292,8 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.uafCopyCommon]: uafCopyCommon,
     [SERVICE_IDS.xMul32u]: xMul32u,
     [SERVICE_IDS.xRootCore]: xRootCore,
+    [SERVICE_IDS.xAddCore]: xAddCore,
+    [SERVICE_IDS.xSubCore]: xSubCore,
     [SERVICE_IDS.compareFloat64]: compareFloat64Service,
     [SERVICE_IDS.spaceClear]: spaceClear,
     [SERVICE_IDS.interiorSmooth64]: interiorSmooth64,
