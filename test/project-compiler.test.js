@@ -779,6 +779,7 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
   const labels = ["Loop 17", "Loop 18", "Loop 26"];
   const generatedSource = emitStaticRunnerModule(linked, {}, {
     regionSize: 256,
+    sinkFallthroughPc: true,
     structuredSelfBackedgeLabels: labels,
   });
   assert.match(generatedSource, /selfBackedge/);
@@ -791,6 +792,7 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
   const candidate = compileLinkedProject(linked, {}, {
     regionSize: 256,
     profileInstructions: true,
+    sinkFallthroughPc: true,
     structuredSelfBackedgeLabels: labels,
   });
   const precompiled = compileLinkedProject(linked, {}, {
@@ -867,6 +869,170 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
   assert.deepEqual(callStates[1], callStates[0]);
   assert.deepEqual(callStates[2], callStates[0]);
   assert.deepEqual(candidate.machine.profile, baseline.machine.profile);
+});
+
+test("fallthrough PC sinking preserves region, callback, and nested-call boundaries", async () => {
+  const source = `
+    "variables" selector = 0; loop counter = 0; scratch = 0;
+    "programme" end;
+    "PC sink start"
+      ${"[scratch]+;".repeat(270)}
+      [loop counter] = 2;
+    "Loop body"
+      [scratch]+;
+      [loop counter] ^ Loop body;
+      A = [selector];
+      ? A = 0 -> Direct target;
+      [scratch]+;
+    "Direct target"
+      => Fast Service;
+      ? ok -> Status target;
+      [scratch]+;
+    "Status target"
+      isocall;
+      leave;
+    "service Fast Service"
+      [scratch]+;
+      end;
+    "Nested"
+      [scratch]+;
+      end;
+  `;
+  const project = await loadProject("fallthrough-pc-sinking.lino", {
+    resolveSource() { return source; },
+  });
+  const linked = linkProject(project);
+  const serviceId = "service:fastservice";
+  const serviceShape = { [serviceId]() {} };
+  const baselineSource = emitStaticRunnerModule(linked, serviceShape, { regionSize: 256 });
+  const generatedSource = emitStaticRunnerModule(linked, serviceShape, {
+    regionSize: 256,
+    sinkFallthroughPc: true,
+  });
+  assert.ok(generatedSource.length < baselineSource.length);
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(generatedSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const direct = linked.labels.get("directtarget");
+  const statusTarget = linked.labels.get("statustarget");
+  const loopBody = linked.labels.get("loopbody");
+  const nested = linked.labels.get("nested");
+  const scratch = linked.symbols.get("scratch").value;
+  const loopCounter = linked.symbols.get("loopcounter").value;
+  const selectorAddress = linked.symbols.get("selector").value;
+  const makeProgram = (options) => {
+    const events = [];
+    const capture = (phase, machine, details = {}) => events.push({
+      phase,
+      pc: machine.pc,
+      registers: [machine.A, machine.B, machine.C, machine.D, machine.E, machine.X],
+      depth: machine.depth,
+      halted: machine.halted,
+      scratch: machine.memory[scratch],
+      ...details,
+    });
+    const host = {
+      intrinsics: {
+        [serviceId](machine) {
+          assert.equal(machine.pc, direct);
+          capture("service-entry", machine);
+          const instructions = machine.callCode(nested + 1, 1_000);
+          assert.equal(machine.pc, direct);
+          capture("service-exit", machine, { instructions });
+          machine.A = (machine.A + 0x10203) | 0;
+          machine.X = machine.memory[selectorAddress] === 0 ? 0x646f6e65 : 0x6661696c;
+        },
+      },
+      isocall(machine) {
+        assert.equal(machine.pc, statusTarget + 1);
+        capture("isocall", machine);
+        return { success: true };
+      },
+    };
+    return { events, program: compileLinkedProject(linked, host, options) };
+  };
+  const baseline = makeProgram({ regionSize: 256, profileInstructions: true });
+  const candidate = makeProgram({
+    regionSize: 256,
+    profileInstructions: true,
+    sinkFallthroughPc: true,
+  });
+  const precompiled = makeProgram({
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const initialize = (subject, pc, selector) => {
+    const { events, program } = subject;
+    program.reset();
+    events.length = 0;
+    program.machine.memory[selectorAddress] = selector;
+    program.machine.memory[loopCounter] = 2;
+    program.machine.memory[scratch] = 0x12345678;
+    program.machine.A = selector;
+    program.machine.B = 13;
+    program.machine.C = 17;
+    program.machine.D = 19;
+    program.machine.E = 23;
+    program.machine.X = 29;
+    for (let index = 0; index < 8; index += 1) {
+      program.machine.stack[index] = (index * 31 + 7) | 0;
+    }
+    program.machine.pc = pc;
+  };
+  const state = ({ program }) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X,
+    ],
+    pc: program.machine.pc,
+    halted: program.machine.halted,
+    depth: program.machine.depth,
+    stack: [...program.machine.stack.subarray(0, 12)],
+  });
+  const start = linked.labels.get("pcsinkstart");
+  const boundary = Math.ceil((start + 1) / 256) * 256;
+  assert.ok(start < boundary && boundary < direct);
+  const entries = [...new Set([
+    start, start + 1,
+    boundary - 1, boundary, boundary + 1,
+    loopBody, loopBody + 1,
+    direct - 2, direct - 1, direct,
+    direct + 1, direct + 2, statusTarget,
+    linked.labels.get("fastservice"), nested,
+  ])];
+  const budgets = [0, 1, 2, 255, 256, 257, 10_000];
+  for (const pc of entries) {
+    for (const selector of [0, 1]) {
+      for (const budget of budgets) {
+        for (const subject of [baseline, candidate, precompiled]) {
+          initialize(subject, pc, selector);
+        }
+        const expected = baseline.program.run(budget);
+        assert.deepEqual(
+          candidate.program.run(budget), expected,
+          `dynamic pc ${pc} selector ${selector} budget ${budget}`,
+        );
+        assert.deepEqual(
+          precompiled.program.run(budget), expected,
+          `static pc ${pc} selector ${selector} budget ${budget}`,
+        );
+        assert.deepEqual(
+          state(candidate), state(baseline),
+          `dynamic state pc ${pc} selector ${selector} budget ${budget}`,
+        );
+        assert.deepEqual(
+          state(precompiled), state(baseline),
+          `static state pc ${pc} selector ${selector} budget ${budget}`,
+        );
+        assert.deepEqual(candidate.events, baseline.events);
+        assert.deepEqual(precompiled.events, baseline.events);
+        assert.deepEqual(candidate.program.machine.profile, baseline.program.machine.profile);
+      }
+    }
+  }
 });
 
 test("native fragments require explicit portable intrinsic implementations", async () => {

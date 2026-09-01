@@ -178,8 +178,9 @@ function instructionPrefix(instruction, count, profile) {
   return `${sampled}${count}`;
 }
 
-function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceInlines = new Map(), count = "", profile = false, branchFallthrough = true) {
+function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceInlines = new Map(), count = "", profile = false, branchFallthrough = true, sinkFallthroughPc = false) {
   const next = instruction.index + 1;
+  const publishNext = sinkFallthroughPc ? "" : `pc = ${next};`;
   count = instructionPrefix(instruction, count, profile);
   let code;
   switch (instruction.op) {
@@ -212,17 +213,17 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceIn
     case "jump": return `case ${instruction.index}: { ${count} pc = (${expression(instruction.target)}) - 1; continue runner; }`;
     case "branch": {
       if (!branchFallthrough) return `case ${instruction.index}: { ${count} pc = ${predicate(instruction)} ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
-      return `case ${instruction.index}: { ${count} if (${predicate(instruction)}) { pc = ((${expression(instruction.target)}) - 1); continue runner; } pc = ${next}; }`;
+      return `case ${instruction.index}: { ${count} if (${predicate(instruction)}) { pc = ((${expression(instruction.target)}) - 1); continue runner; } ${publishNext} }`;
     }
     case "branch-status": {
       const status = instruction.status === "ok" ? DONE : FAIL;
       if (!branchFallthrough) return `case ${instruction.index}: { ${count} pc = (X === ${status}) ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
-      return `case ${instruction.index}: { ${count} if (X === ${status}) { pc = ((${expression(instruction.target)}) - 1); continue runner; } pc = ${next}; }`;
+      return `case ${instruction.index}: { ${count} if (X === ${status}) { pc = ((${expression(instruction.target)}) - 1); continue runner; } ${publishNext} }`;
     }
     case "loop": {
       code = updateDestination(instruction.counter, (left) => `((${left}) - 1)`);
       if (!branchFallthrough) return `case ${instruction.index}: { ${count} ${code} pc = (${expression(instruction.counter)}) !== 0 ? ((${expression(instruction.target)}) - 1) : ${next}; continue runner; }`;
-      return `case ${instruction.index}: { ${count} ${code} if ((${expression(instruction.counter)}) !== 0) { pc = ((${expression(instruction.target)}) - 1); continue runner; } pc = ${next}; }`;
+      return `case ${instruction.index}: { ${count} ${code} if ((${expression(instruction.counter)}) !== 0) { pc = ((${expression(instruction.target)}) - 1); continue runner; } ${publishNext} }`;
     }
     case "isocall": return `case ${instruction.index}: { ${count} pc = ${next}; ${SYNC_MACHINE} const result = dispatch(machine); X = result?.status === ${FAIL} || result?.success === false ? ${FAIL} : ${DONE}; if (result?.yielded || result?.yield) { outputSleep=Math.max(0,Number(result?.sleepMilliseconds??result?.delay??0)||0); ${finishRunner("yield", "executed")} } }`;
     case "intrinsic": return `case ${instruction.index}: { ${count} pc=${instruction.index}; ${SYNC_MACHINE} native(${JSON.stringify(instruction.intrinsicId)}, machine); ${REFRESH_MEMORY} s=machine.stack; d=machine.depth|0; A=machine.A|0; B=machine.B|0; C=machine.C|0; D=machine.D|0; E=machine.E|0; X=machine.X|0; pc=${next}; }`;
@@ -231,7 +232,7 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceIn
     case "leave": return `case ${instruction.index}: { ${count} ${returnInstruction(null, instruction.index)} }`;
     default: throw new SyntaxError(`Cannot emit Lino instruction ${instruction.op}`);
   }
-  return `case ${instruction.index}: { ${count} ${code} pc = ${next}; }`;
+  return `case ${instruction.index}: { ${count} ${code} ${publishNext} }`;
 }
 
 function fallsThrough(instruction, serviceIntrinsicIds) {
@@ -306,7 +307,7 @@ function structuredSelfBackedges(linked, instructions, serviceIntrinsicIds, coun
   return blocks;
 }
 
-function emitStructuredSelfBackedge(body, counts, profile) {
+function emitStructuredSelfBackedge(body, counts, profile, sinkFallthroughPc) {
   const start = body[0].index;
   const terminal = body.at(-1);
   const loop = `selfBackedge${start}`;
@@ -316,7 +317,8 @@ function emitStructuredSelfBackedge(body, counts, profile) {
   const terminalPrefix = instructionPrefix(
     terminal, counts.get(terminal.index) ?? "", profile,
   );
-  return `case ${start}: { ${loop}:while(true){${code}${terminalPrefix}if(${predicate(terminal)}){pc=${start};continue ${loop};}pc=${terminal.index + 1};break ${loop};}continue runner; }`;
+  const publishBackedge = sinkFallthroughPc ? "" : `pc=${start};`;
+  return `case ${start}: { ${loop}:while(true){${code}${terminalPrefix}if(${predicate(terminal)}){${publishBackedge}continue ${loop};}pc=${terminal.index + 1};break ${loop};}continue runner; }`;
 }
 
 export function emitRunner(linked, options = {}) {
@@ -330,15 +332,18 @@ export function emitRunner(linked, options = {}) {
   const selfBackedges = structuredSelfBackedges(
     linked, instructions, serviceIntrinsicIds, counts, options.structuredSelfBackedgeLabels,
   );
-  const cases = instructions.map((instruction) => {
+  const cases = instructions.map((instruction, index) => {
+    const sinkFallthroughPc = options.sinkFallthroughPc === true
+      && instructions[index + 1]?.index === instruction.index + 1;
     const body = selfBackedges.get(instruction.index);
     if (body) return emitStructuredSelfBackedge(
       body, counts, options.profileInstructions === true,
+      options.sinkFallthroughPc === true,
     );
     return emitInstruction(
       instruction, serviceIntrinsicIds, serviceInlines,
       counts.get(instruction.index) ?? "", options.profileInstructions === true,
-      options.branchFallthrough !== false,
+      options.branchFallthrough !== false, sinkFallthroughPc,
     );
   }).join("\n");
   const defaultCase = options.transfer
@@ -399,6 +404,7 @@ export function emitStaticRunnerModule(linked, implementations, options = {}) {
       instructions, serviceIntrinsicIds, serviceInlines,
       batchBudgets: options.batchBudgets,
       branchFallthrough: options.branchFallthrough,
+      sinkFallthroughPc: options.sinkFallthroughPc,
       structuredSelfBackedgeLabels: options.structuredSelfBackedgeLabels,
       transfer: true,
     });
@@ -449,6 +455,7 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
         instructions, serviceIntrinsicIds, serviceInlines,
         batchBudgets: options.batchBudgets, profileInstructions: options.profileInstructions,
         branchFallthrough: options.branchFallthrough,
+        sinkFallthroughPc: options.sinkFallthroughPc,
         structuredSelfBackedgeLabels: options.structuredSelfBackedgeLabels,
         transfer: true,
       });
