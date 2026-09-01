@@ -40,7 +40,9 @@ function fixture() {
     "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
     "xua", "xub", "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1",
     "xup2", "xup3", "xutmp", "xumid", "xulo", "xuhi",
-    "XS", "XE", "XMH", "XML", "xtmp", "srd0", "srd1", "srd2", "srd3",
+    "XS", "XE", "XMH", "XML", "YS", "YE", "YMH", "YML", "xtmp",
+    "rc", "rh", "rl", "qc", "qh", "ql", "xiter", "xrbit", "xsbit",
+    "srd0", "srd1", "srd2", "srd3",
     "sqrh", "sqrl", "sqmh", "sqml", "sqcarry", "sqstep",
     "srm0", "srm1", "srm2", "srm3",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
@@ -306,6 +308,129 @@ test("restoring-root service preserves exact shared Lino integer state", () => {
     const low = random;
     const exponent = 15309 + (index % (17406 - 15309 + 1));
     invoke(exponent, high, low, index & 1);
+  }
+
+  assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
+  assert.equal(machine.depth, 3);
+  assert.equal(machine.halted, false);
+  assert.equal(memory[canary], 0x13579bdf);
+  assert.equal(memory[canary + 1], -0x2468ace);
+});
+
+test("restoring-quotient service preserves exact shared Lino integer state", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const mask = 0xffffffffn;
+  const mask64 = 0xffffffffffffffffn;
+  const expectedQuotient = (xExponent, xHigh, xLow, yExponent, yHigh, yLow) => {
+    const xMantissa = (BigInt(xHigh >>> 0) << 32n) | BigInt(xLow >>> 0);
+    const yMantissa = (BigInt(yHigh >>> 0) << 32n) | BigInt(yLow >>> 0);
+    const dividend = xMantissa << 65n;
+    const quotient = dividend / yMantissa;
+    const remainder = dividend % yMantissa;
+    const quotientCarry = Number((quotient >> 64n) & mask) | 0;
+    const quotientHigh = Number((quotient >> 32n) & mask) | 0;
+    const quotientLow = Number(quotient & mask) | 0;
+    const remainderHigh = Number((remainder >> 32n) & mask) | 0;
+    const remainderLow = Number(remainder & mask) | 0;
+    const temporary = (xExponent - yExponent + 16383) | 0;
+    const large = quotient >= 1n << 65n;
+    const shift = large ? 2n : 1n;
+    let output = (quotient >> shift) & mask64;
+    const roundBit = Number((quotient >> (shift - 1n)) & 1n);
+    const stickyBits = large
+      ? ((quotientLow & 1) | remainderHigh | remainderLow)
+      : (remainderHigh | remainderLow);
+    let exponent = large ? temporary : (temporary - 1) | 0;
+    if (roundBit !== 0 && (stickyBits !== 0 || (output & 1n) !== 0n)) {
+      output = (output + 1n) & mask64;
+      if (output === 0n) {
+        output = 0x8000000000000000n;
+        exponent = (exponent + 1) | 0;
+      }
+    }
+    return {
+      temporary, quotientCarry, quotientHigh, quotientLow,
+      remainderHigh, remainderLow, roundBit, stickyBits, exponent,
+      outputHigh: Number((output >> 32n) & mask) | 0,
+      outputLow: Number(output & mask) | 0,
+    };
+  };
+
+  const canary = 1_900_000;
+  memory[canary] = 0x13579bdf;
+  memory[canary + 1] = -0x2468ace;
+  machine.stack = Int32Array.from([17, -23, 42, 99]);
+  machine.depth = 3;
+  machine.halted = false;
+  const registers = [11, -13, 17, -19, 23];
+  const invoke = (xExponent, xHigh, xLow, yExponent, yHigh, yLow, xSign = 0, ySign = 0) => {
+    memory[at("XS")] = xSign;
+    memory[at("XE")] = xExponent;
+    memory[at("XMH")] = xHigh;
+    memory[at("XML")] = xLow;
+    memory[at("YS")] = ySign;
+    memory[at("YE")] = yExponent;
+    memory[at("YMH")] = yHigh;
+    memory[at("YML")] = yLow;
+    for (const name of ["xtmp", "rc", "rh", "rl", "qc", "qh", "ql", "xiter", "xrbit", "xsbit"]) {
+      memory[at(name)] = 0x55555555;
+    }
+    [machine.A, machine.B, machine.C, machine.D, machine.E] = registers;
+    machine.X = 0x6661696c;
+    const expected = expectedQuotient(xExponent, xHigh, xLow, yExponent, yHigh, yLow);
+
+    intrinsic[SERVICES.xQuoCore](machine, linked);
+
+    assert.equal(memory[at("XS")], (xSign ^ ySign) | 0);
+    assert.equal(memory[at("XE")], expected.exponent);
+    assert.equal(memory[at("XMH")], expected.outputHigh);
+    assert.equal(memory[at("XML")], expected.outputLow);
+    assert.equal(memory[at("YS")], ySign);
+    assert.equal(memory[at("YE")], yExponent);
+    assert.equal(memory[at("YMH")], yHigh | 0);
+    assert.equal(memory[at("YML")], yLow | 0);
+    assert.equal(memory[at("xtmp")], expected.temporary);
+    assert.equal(memory[at("rc")], 0);
+    assert.equal(memory[at("rh")], expected.remainderHigh);
+    assert.equal(memory[at("rl")], expected.remainderLow);
+    assert.equal(memory[at("qc")], expected.quotientCarry);
+    assert.equal(memory[at("qh")], expected.quotientHigh);
+    assert.equal(memory[at("ql")], expected.quotientLow);
+    assert.equal(memory[at("xiter")], 65);
+    assert.equal(memory[at("xrbit")], expected.roundBit);
+    assert.equal(memory[at("xsbit")], expected.stickyBits);
+    assert.deepEqual([machine.A, machine.B, machine.C, machine.D, machine.E], registers);
+    assert.equal(machine.X, 0x646f6e65);
+  };
+
+  const edges = [
+    [16383, 0x80000000, 0, 16383, 0x80000000, 0],
+    [16383, 0x80000000, 0, 16383, 0xffffffff, -1],
+    [16383, 0xffffffff, -1, 16383, 0x80000000, 0],
+    [15309, 0x80000000, 1, 17406, 0x80000000, 0],
+    [17406, 0xffffffff, -2, 15309, 0xfffffffe, -1],
+    [16384, 0xaaaaaaaa, 0x55555555, 16382, 0xcccccccc, 0x33333333],
+  ];
+  for (let index = 0; index < edges.length; index += 1) {
+    invoke(...edges[index], index & 1, (index >>> 1) & 1);
+  }
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 4096; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const xHigh = random | 0x80000000;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const xLow = random;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const yHigh = random | 0x80000000;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const yLow = random;
+    invoke(
+      15309 + (index % (17406 - 15309 + 1)), xHigh, xLow,
+      15309 + ((index * 17) % (17406 - 15309 + 1)), yHigh, yLow,
+      index & 1, (index >>> 1) & 1,
+    );
   }
 
   assert.deepEqual([...machine.stack], [17, -23, 42, 99]);

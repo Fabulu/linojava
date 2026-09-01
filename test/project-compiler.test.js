@@ -454,6 +454,224 @@ test("static restoring-root service matches all shared Lino call paths", async (
   assert.equal(serviceCalls, cases.length);
 });
 
+test("static restoring-quotient service matches all shared Lino call paths", async () => {
+  const source = `
+    "constants" XBIAS = 16383;
+    "variables"
+      XS = 0; XE = 0; XMH = 0; XML = 0;
+      YS = 0; YE = 0; YMH = 0; YML = 0;
+      xtmp = 0; rc = 0; rh = 0; rl = 0; qc = 0; qh = 0; ql = 0;
+      xiter = 0; xrbit = 0; xsbit = 0;
+      selector = 0; continuation = 0; quotient pointer = XQuoCore;
+    "programme"
+      A = [selector];
+      ? A = 0 -> Call zero;
+      ? A = 1 -> Call one;
+      -> Call two;
+    "Call zero"
+      => XQuoCore; [continuation] = 10; end;
+    "Call one"
+      => XQuoCore; [continuation] = 20; end;
+    "Call two"
+      => XQuoCore; [continuation] = 30; end;
+    "Indirect quotient"
+      => [quotient pointer]; [continuation] = 40; end;
+    "XQuoCore"
+      ---->;
+      => XQuoCore body;
+      <----;
+      end;
+    "XQuoCore body"
+      A = [XS]; B = [YS]; A # B; [XS] = A;
+      A = [XE]; A - [YE]; A + XBIAS; [xtmp] = A;
+      [rc] = 0;
+      A = [XMH]; [rh] = A;
+      A = [XML]; [rl] = A;
+      [qc] = 0; [qh] = 0; [ql] = 0;
+      [xiter] = 0;
+      A = [XMH];
+      ? A '> [YMH] -> xq pre;
+      ? A '< [YMH] -> xq loop;
+      A = [XML];
+      ? A '< [YML] -> xq loop;
+    "xq pre"
+      A = [rl]; E = 0;
+      ? A '>= [YML] -> xq preb;
+      E = 1;
+    "xq preb"
+      A = [rl]; A - [YML]; [rl] = A;
+      A = [rh]; A - [YMH]; A - E; [rh] = A;
+      [ql] = 1;
+    "xq loop"
+      A = [qc]; A < 1; B = [qh]; B > 31; A | B; [qc] = A;
+      A = [qh]; A < 1; B = [ql]; B > 31; A | B; [qh] = A;
+      A = [ql]; A < 1; [ql] = A;
+      A = [rh]; A > 31; [rc] = A;
+      A = [rh]; A < 1; B = [rl]; B > 31; A | B; [rh] = A;
+      A = [rl]; A < 1; [rl] = A;
+      ? [rc] != 0 -> xq sub;
+      A = [rh];
+      ? A '> [YMH] -> xq sub;
+      ? A '< [YMH] -> xq next;
+      A = [rl];
+      ? A '< [YML] -> xq next;
+    "xq sub"
+      A = [rl]; E = 0;
+      ? A '>= [YML] -> xq nob;
+      E = 1;
+    "xq nob"
+      A = [rl]; A - [YML]; [rl] = A;
+      A = [rh]; A - [YMH]; A - E; [rh] = A;
+      [rc] = 0;
+      A = [ql]; A | 1; [ql] = A;
+    "xq next"
+      [xiter]+;
+      ? [xiter] < 65 -> xq loop;
+      A = [qc]; A & 2;
+      ? A = 0 -> xq small;
+      A = [qh]; A > 2; B = [qc]; B < 30; A | B; [XMH] = A;
+      A = [ql]; A > 2; B = [qh]; B < 30; A | B; [XML] = A;
+      A = [ql]; A > 1; A & 1; [xrbit] = A;
+      A = [ql]; A & 1; B = [rh]; A | B; B = [rl]; A | B; [xsbit] = A;
+      A = [xtmp]; [XE] = A;
+      -> xq round;
+    "xq small"
+      A = [qh]; A > 1; B = [qc]; B < 31; A | B; [XMH] = A;
+      A = [ql]; A > 1; B = [qh]; B < 31; A | B; [XML] = A;
+      A = [ql]; A & 1; [xrbit] = A;
+      A = [rh]; B = [rl]; A | B; [xsbit] = A;
+      A = [xtmp]; A - 1; [XE] = A;
+    "xq round"
+      ? [xrbit] = 0 -> xq done;
+      ? [xsbit] != 0 -> xq inc;
+      A = [XML]; A & 1;
+      ? A = 0 -> xq done;
+    "xq inc"
+      A = [XML]; A + 1; [XML] = A;
+      ? A != 0 -> xq done;
+      A = [XMH]; A + 1; [XMH] = A;
+      ? A != 0 -> xq done;
+      A = 80000000h; [XMH] = A;
+      [XML] = 0;
+      A = [XE]; A + 1; [XE] = A;
+    "xq done"
+      end;
+  `;
+  const project = await loadProject("xquocore-service.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const implementation = allIntrinsics[NOCTIS_SERVICES.xQuoCore];
+  const intrinsics = { [NOCTIS_SERVICES.xQuoCore]: implementation };
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const direct = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    intrinsics: {
+      [NOCTIS_SERVICES.xQuoCore](machine, directLinked) {
+        serviceCalls += 1;
+        implementation(machine, directLinked);
+      },
+    },
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const at = (name) => linked.symbols.get(name).value;
+  const initialize = (program, selector, xExponent, xHigh, xLow, yExponent, yHigh, yLow) => {
+    program.reset();
+    program.machine.memory[at("selector")] = selector;
+    program.machine.memory[at("xs")] = selector & 1;
+    program.machine.memory[at("xe")] = xExponent;
+    program.machine.memory[at("xmh")] = xHigh;
+    program.machine.memory[at("xml")] = xLow;
+    program.machine.memory[at("ys")] = (selector >>> 1) & 1;
+    program.machine.memory[at("ye")] = yExponent;
+    program.machine.memory[at("ymh")] = yHigh;
+    program.machine.memory[at("yml")] = yLow;
+    for (const name of ["xtmp", "rc", "rh", "rl", "qc", "qh", "ql", "xiter", "xrbit", "xsbit"]) {
+      program.machine.memory[at(name)] = 0x55555555;
+    }
+    program.machine.A = 11;
+    program.machine.B = -13;
+    program.machine.C = 17;
+    program.machine.D = -19;
+    program.machine.E = 23;
+    program.machine.X = 0x6661696c;
+    program.machine.stack[0] = 29;
+    program.machine.stack[1] = -31;
+    program.machine.depth = 2;
+    program.machine.halted = false;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X, program.machine.depth, program.machine.halted,
+    ],
+    stack: [...program.machine.stack.subarray(0, program.machine.depth)],
+  });
+  const cases = [
+    [16383, 0x80000000, 0, 16383, 0x80000000, 0],
+    [16383, 0x80000000, 0, 16383, 0xffffffff, -1],
+    [16383, 0xffffffff, -1, 16383, 0x80000000, 0],
+    [15309, 0x80000000, 1, 17406, 0x80000000, 0],
+    [17406, 0xffffffff, -2, 15309, 0xfffffffe, -1],
+  ];
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 64; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const xHigh = random | 0x80000000;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const xLow = random;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const yHigh = random | 0x80000000;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    cases.push([15309 + index, xHigh, xLow, 17406 - index, yHigh, random]);
+  }
+
+  for (let index = 0; index < cases.length; index += 1) {
+    const selector = index % 3;
+    for (const program of [fallback, direct, precompiled]) {
+      initialize(program, selector, ...cases[index]);
+      assert.equal(program.run(10_000).status, "halted");
+    }
+    assert.equal(fallback.machine.memory[at("continuation")], 10 * (selector + 1));
+    assert.deepEqual(state(direct), state(fallback));
+    assert.deepEqual(state(precompiled), state(fallback));
+  }
+  assert.equal(serviceCalls, cases.length);
+
+  for (const label of ["indirectquotient", "xquocore"]) {
+    for (const program of [fallback, direct]) {
+      initialize(program, 0, 16384, 0xd413cccf, -411462895, 16380, 0xa1b2c3d4, 0x12345678);
+      program.machine.pc = linked.labels.get(label);
+      assert.equal(program.run(10_000).status, "halted");
+    }
+    assert.deepEqual(state(direct), state(fallback));
+  }
+  assert.equal(serviceCalls, cases.length);
+  assert.equal(direct.machine.memory[at("continuation")], 0);
+
+  const quotientHandle = linked.labels.get("xquocore") + 1;
+  for (const program of [fallback, direct, precompiled]) {
+    initialize(program, 0, 16384, 0xd413cccf, -411462895, 16380, 0xa1b2c3d4, 0x12345678);
+    const outerPc = program.machine.pc;
+    assert.ok(program.machine.callCode(quotientHandle, 10_000) > 0);
+    assert.equal(program.machine.pc, outerPc);
+  }
+  assert.deepEqual(state(direct), state(fallback));
+  assert.deepEqual(state(precompiled), state(fallback));
+  assert.equal(serviceCalls, cases.length);
+});
+
 test("static HUD lamp smoother service matches all shared Lino call paths", async () => {
   const padding = "0;".repeat(4_000);
   const source = `
