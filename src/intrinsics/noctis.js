@@ -237,7 +237,6 @@ const SERVICE_IDS = Object.freeze({
   uafCopyCommon: "service:uafcopycommon",
   xMul32u: "service:xmul32u",
   xRootCore: "service:xrootcore",
-  xQuoCore: "service:xquocore",
   compareFloat64: "service:fcmp",
   spaceClear: "service:vhgspaceclear",
   interiorSmooth64: "service:vhginteriorsmooth64",
@@ -347,7 +346,6 @@ const ekeyAddressCaches = new WeakMap();
 const surfaceBulkAddressCaches = new WeakMap();
 const xMul32uAddressCaches = new WeakMap();
 const xRootCoreAddressCaches = new WeakMap();
-const xQuoCoreAddressCaches = new WeakMap();
 const paletteShadeAddressCaches = new WeakMap();
 const paletteTavolaAddressCaches = new WeakMap();
 const groundRoundHillAddressCaches = new WeakMap();
@@ -1803,141 +1801,6 @@ function xRootCoreInline(linked) {
     m[${p.remainder0}]=xrRemainder0;m[${p.remainder1}]=xrRemainder1;m[${p.remainder2}]=xrRemainder2;m[${p.remainder3}]=xrE;
     m[${p.mantissaHigh}]=xrOutputHigh;m[${p.mantissaLow}]=xrOutputLow;m[${p.exponent}]=xrExponent;m[${p.sign}]=0;
     A=xrExponent;B=xrB;C=xrC;D=xrD;E=xrE;X=${LINO_DONE};
-  }`;
-}
-
-function xQuoCoreAddresses(linked) {
-  let cached = xQuoCoreAddressCaches.get(linked);
-  if (cached) return cached;
-  cached = {
-    xSign: address(linked, "XS"),
-    xExponent: address(linked, "XE"),
-    xMantissaHigh: address(linked, "XMH"),
-    xMantissaLow: address(linked, "XML"),
-    ySign: address(linked, "YS"),
-    yExponent: address(linked, "YE"),
-    yMantissaHigh: address(linked, "YMH"),
-    yMantissaLow: address(linked, "YML"),
-    temporary: address(linked, "xtmp"),
-    remainderCarry: address(linked, "rc"),
-    remainderHigh: address(linked, "rh"),
-    remainderLow: address(linked, "rl"),
-    quotientCarry: address(linked, "qc"),
-    quotientHigh: address(linked, "qh"),
-    quotientLow: address(linked, "ql"),
-    iterations: address(linked, "xiter"),
-    roundBit: address(linked, "xrbit"),
-    stickyBits: address(linked, "xsbit"),
-  };
-  xQuoCoreAddressCaches.set(linked, cached);
-  return cached;
-}
-
-function xQuoCore(machine, linked) {
-  const memory = machine.memory;
-  const p = xQuoCoreAddresses(linked);
-  const mask = 0xffffffffn;
-  const mask64 = 0xffffffffffffffffn;
-  const xHigh = memory[p.xMantissaHigh] | 0;
-  const xLow = memory[p.xMantissaLow] | 0;
-  const yHigh = memory[p.yMantissaHigh] | 0;
-  const yLow = memory[p.yMantissaLow] | 0;
-  const xMantissa = (BigInt(xHigh >>> 0) << 32n) | BigInt(xLow >>> 0);
-  const yMantissa = (BigInt(yHigh >>> 0) << 32n) | BigInt(yLow >>> 0);
-
-  let quotient;
-  let remainder;
-  if (xHigh < 0 && yHigh < 0) {
-    const dividend = xMantissa << 65n;
-    quotient = dividend / yMantissa;
-    remainder = dividend % yMantissa;
-  } else {
-    quotient = 0n;
-    remainder = xMantissa;
-    if (xMantissa >= yMantissa) {
-      remainder = (xMantissa - yMantissa) & mask64;
-      quotient = 1n;
-    }
-    for (let iteration = 0; iteration < 65; iteration += 1) {
-      quotient <<= 1n;
-      const doubled = remainder << 1n;
-      if (doubled >= yMantissa) {
-        remainder = (doubled - yMantissa) & mask64;
-        quotient |= 1n;
-      } else {
-        remainder = doubled & mask64;
-      }
-    }
-  }
-
-  const quotientCarry = Number((quotient >> 64n) & mask) | 0;
-  const quotientHigh = Number((quotient >> 32n) & mask) | 0;
-  const quotientLow = Number(quotient & mask) | 0;
-  const remainderHigh = Number((remainder >> 32n) & mask) | 0;
-  const remainderLow = Number(remainder & mask) | 0;
-  const temporary = (memory[p.xExponent] - memory[p.yExponent] + 16383) | 0;
-  const large = (quotientCarry & 2) !== 0;
-  const shift = large ? 2n : 1n;
-  let output = (quotient >> shift) & mask64;
-  const roundBit = Number((quotient >> (shift - 1n)) & 1n);
-  const stickyBits = large
-    ? ((quotientLow & 1) | remainderHigh | remainderLow)
-    : (remainderHigh | remainderLow);
-  let exponent = large ? temporary : (temporary - 1) | 0;
-  if (roundBit !== 0 && (stickyBits !== 0 || (output & 1n) !== 0n)) {
-    output = (output + 1n) & mask64;
-    if (output === 0n) {
-      output = 0x8000000000000000n;
-      exponent = (exponent + 1) | 0;
-    }
-  }
-
-  memory[p.xSign] = (memory[p.xSign] ^ memory[p.ySign]) | 0;
-  memory[p.temporary] = temporary;
-  memory[p.remainderCarry] = 0;
-  memory[p.remainderHigh] = remainderHigh;
-  memory[p.remainderLow] = remainderLow;
-  memory[p.quotientCarry] = quotientCarry;
-  memory[p.quotientHigh] = quotientHigh;
-  memory[p.quotientLow] = quotientLow;
-  memory[p.iterations] = 65;
-  memory[p.roundBit] = roundBit;
-  memory[p.stickyBits] = stickyBits;
-  memory[p.xMantissaHigh] = Number((output >> 32n) & mask) | 0;
-  memory[p.xMantissaLow] = Number(output & mask) | 0;
-  memory[p.xExponent] = exponent;
-  machine.X = LINO_DONE;
-}
-
-function xQuoCoreInline(linked) {
-  const p = xQuoCoreAddresses(linked);
-  return `{
-    const xqMask=0xffffffffn,xqMask64=0xffffffffffffffffn;
-    const xqXHigh=m[${p.xMantissaHigh}]|0,xqXLow=m[${p.xMantissaLow}]|0;
-    const xqYHigh=m[${p.yMantissaHigh}]|0,xqYLow=m[${p.yMantissaLow}]|0;
-    const xqXM=(BigInt(xqXHigh>>>0)<<32n)|BigInt(xqXLow>>>0);
-    const xqYM=(BigInt(xqYHigh>>>0)<<32n)|BigInt(xqYLow>>>0);
-    let xqQ,xqR;
-    if(xqXHigh<0&&xqYHigh<0){const xqDividend=xqXM<<65n;xqQ=xqDividend/xqYM;xqR=xqDividend%xqYM;}
-    else{xqQ=0n;xqR=xqXM;if(xqXM>=xqYM){xqR=(xqXM-xqYM)&xqMask64;xqQ=1n;}
-      for(let xqI=0;xqI<65;xqI+=1){xqQ<<=1n;const xqDoubled=xqR<<1n;
-        if(xqDoubled>=xqYM){xqR=(xqDoubled-xqYM)&xqMask64;xqQ|=1n;}else{xqR=xqDoubled&xqMask64;}}}
-    const xqQC=Number((xqQ>>64n)&xqMask)|0,xqQH=Number((xqQ>>32n)&xqMask)|0,xqQL=Number(xqQ&xqMask)|0;
-    const xqRH=Number((xqR>>32n)&xqMask)|0,xqRL=Number(xqR&xqMask)|0;
-    const xqTemporary=(m[${p.xExponent}]-m[${p.yExponent}]+16383)|0;
-    const xqLarge=(xqQC&2)!==0,xqShift=xqLarge?2n:1n;
-    let xqOutput=(xqQ>>xqShift)&xqMask64;
-    const xqRound=Number((xqQ>>(xqShift-1n))&1n);
-    const xqSticky=xqLarge?((xqQL&1)|xqRH|xqRL):(xqRH|xqRL);
-    let xqExponent=xqLarge?xqTemporary:(xqTemporary-1)|0;
-    if(xqRound!==0&&(xqSticky!==0||(xqOutput&1n)!==0n)){xqOutput=(xqOutput+1n)&xqMask64;
-      if(xqOutput===0n){xqOutput=0x8000000000000000n;xqExponent=(xqExponent+1)|0;}}
-    m[${p.xSign}]=(m[${p.xSign}]^m[${p.ySign}])|0;m[${p.temporary}]=xqTemporary;
-    m[${p.remainderCarry}]=0;m[${p.remainderHigh}]=xqRH;m[${p.remainderLow}]=xqRL;
-    m[${p.quotientCarry}]=xqQC;m[${p.quotientHigh}]=xqQH;m[${p.quotientLow}]=xqQL;m[${p.iterations}]=65;
-    m[${p.roundBit}]=xqRound;m[${p.stickyBits}]=xqSticky;
-    m[${p.xMantissaHigh}]=Number((xqOutput>>32n)&xqMask)|0;m[${p.xMantissaLow}]=Number(xqOutput&xqMask)|0;
-    m[${p.xExponent}]=xqExponent;X=${LINO_DONE};
   }`;
 }
 
@@ -14195,7 +14058,6 @@ export function createNoctisIntrinsics(overrides = {}) {
     [SERVICE_IDS.uafCopyCommon]: uafCopyCommon,
     [SERVICE_IDS.xMul32u]: xMul32u,
     [SERVICE_IDS.xRootCore]: xRootCore,
-    [SERVICE_IDS.xQuoCore]: xQuoCore,
     [SERVICE_IDS.compareFloat64]: compareFloat64Service,
     [SERVICE_IDS.spaceClear]: spaceClear,
     [SERVICE_IDS.interiorSmooth64]: interiorSmooth64,
@@ -14545,9 +14407,6 @@ export function createNoctisIntrinsics(overrides = {}) {
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.xRootCore)) {
     implementations[SERVICE_IDS.xRootCore].inline = xRootCoreInline;
-  }
-  if (!Object.hasOwn(overrides, SERVICE_IDS.xQuoCore)) {
-    implementations[SERVICE_IDS.xQuoCore].inline = xQuoCoreInline;
   }
   if (!Object.hasOwn(overrides, SERVICE_IDS.groundHudLampSmooth)) {
     implementations[SERVICE_IDS.groundHudLampSmooth].inline = groundHudLampSmoothInline;
