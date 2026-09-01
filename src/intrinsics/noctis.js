@@ -6312,7 +6312,7 @@ function landedTileDistance(machine, linked) {
 function landedTileAdmission(machine, linked) {
   const memory = machine.memory;
   const p = landedTerrainAddresses(linked);
-  landedTileAdmissionAt(
+  return landedTileAdmissionAt(
     machine, linked, p,
     memory[p.VHGNDx] | 0, memory[p.VHGNDz] | 0,
     memory[p.VHGNDcamtx] | 0, memory[p.VHGNDcamtz] | 0,
@@ -6322,11 +6322,7 @@ function landedTileAdmission(machine, linked) {
 function landedTileAdmissionAt(machine, linked, p, x, z, camtx, camtz) {
   const memory = machine.memory;
   const manhattan = Math.abs(camtx - x) + Math.abs(camtz - z);
-  memory[p.VHGNDmanhattan] = manhattan;
-  if (manhattan > 90) {
-    memory[p.VHGNDnativecomplete] = 2;
-    return;
-  }
+  if (manhattan > 90) return 2;
   memory[p.VHGNDh1] = Math.imul(z, 200) + x;
   const dx = (memory[p.VHGNDcamx] - ((x << 14) + 8192)) | 0;
   const dz = (memory[p.VHGNDcamz] - ((z << 14) + 8192)) | 0;
@@ -6341,19 +6337,21 @@ function landedTileAdmissionAt(machine, linked, p, x, z, camtx, camtz) {
   const raw = roundedDistance >> 14;
   memory[p.VHGNDrawdepth] = raw;
   memory[p.VHGNDdepth] = Math.max(raw - 1, 0);
-  if (!machine.noctisDisableTerrainTileCore) landedTerrainTileCore(machine, linked, manhattan, raw);
+  return machine.noctisDisableTerrainTileCore
+    ? 0 : landedTerrainTileCore(machine, linked, manhattan, raw);
 }
 
 function landedTerrainAddresses(linked) {
   let cached = landedTerrainAddressCaches.get(linked);
   if (cached) return cached;
   const names = [
-    "VHGNDnativecomplete", "VHGNDmirror", "VHGNDruinpass", "VHGNDruinanchor",
+    "VHGNDmirror", "VHGNDruinpass", "VHGNDruinanchor",
     "VHGNDreflected", "VHGNDtscale",
     "VHGNDdepth", "VHGNDshade", "VHGNDh1", "VHGNDs1", "VHGNDs2", "VHGNDs3", "VHGNDs4",
     "GRiptype", "VHGNDsctype", "VHGNDruined", "VHGNDruindrawn", "VHGNDruins", "SPtinta", "DBcol", "SPescr", "DBflar", "DBent",
     "SPcull", "VHGNDtilepolys", "fw", "VHGNDvctri", "FCret", "PGtexf", "RPSM",
-    "VHGNDnormindex", "VHGNDnormgen", "VHGNDnormstamp", "VHGNDnormx", "VHGNDnormy", "VHGNDnormz",
+    "VHGNDnormindex", "VHGNDnormgen", "VHGNDnormstamp",
+    "VHGNDnormx0", "VHGNDnormx1", "VHGNDnormy0", "VHGNDnormy1", "VHGNDnormz0", "VHGNDnormz1",
     "VHGNDvcgen", "VHGNDvcindex", "VHGNDvcstamp", "VHGNDvcvisible",
     "VHGNDvcrx0", "VHGNDvcrx1", "VHGNDvcry0", "VHGNDvcry1",
     "VHGNDvcrz0", "VHGNDvcrz1", "VHGNDvcpx", "VHGNDvcpy", "VHGNDmpbase",
@@ -6363,10 +6361,11 @@ function landedTerrainAddresses(linked) {
     "VHGNDcamtx", "VHGNDcamtz", "VHGNDcamx", "VHGNDcamz", "VHGlanded", "VHGNDbeta", "VHGNDtmp",
     "VHGNDdropx", "VHGNDdropz", "VHGNDanimals", "VHGNDbirds", "VHGNDanidata", "VHGNDbirddata",
     "VHGNDanisingle", "VHGNDanii", "VHGNDanip", "VHGNDanix", "VHGNDaniz", "VHGNDviewrz",
-    "VHGNDmii", "VHGNDbii", "VHGNDfaunamid", "VHGNDfaunabid", "SPskipmid",
+    "VHGNDmii", "VHGNDbii", "VHGNDfaunaid", "VHGNDfaunap", "VHGNDfaunatilecurrent",
+    "VHGNDpopulation", "VHGNDfaunatypes", "VHGNDfaunatiles", "SPskipmid",
     "VHGNDalpha", "VHGNDwaterhorizon", "VHGNDwaterden", "VHGNDwatery",
     "GRSKnightzone", "VHGNDwaterbase", "VHGNDwaterptr", "VHGNDwatercount",
-    "VHGNDmanhattan", "VHGNDrawdepth", "VHGNDdx", "VHGNDdz", "VHGNDvv",
+    "VHGNDrawdepth", "VHGNDdx", "VHGNDdz", "VHGNDvv",
     "VHGdrawhud", "VHGhudcount", "VHGNDsurlight", "VHGseamless",
     "VHGNDframei", "VHGNDframey", "VHGNDframecol", "VHGNDframeoff", "VHGNDframecount",
     "VHGmode", "VHGbeta", "VHGNDhudy", "VHGNDcompassrem", "VHGNDcompasspos",
@@ -6485,160 +6484,50 @@ function terrainTileFauna(machine, linked) {
     machine.X = LINO_DONE;
     return;
   }
-  const dispatch = machine.noctisTerrainFaunaDispatch;
-  if (dispatch) {
-    memory[p.VHGNDanisingle] = 1;
-    const entries = dispatch.byCell.get(z * 200 + x)?.slice();
-    if (entries) {
-      for (const entry of entries) {
-        const worldX = memory[entry.record] | 0;
-        const worldZ = memory[entry.record + 1] | 0;
-        const cellX = Math.max(0, Math.min(199, (worldX / 16384) | 0));
-        const cellZ = Math.max(0, Math.min(199, (worldZ / 16384) | 0));
-        if (cellX !== x || cellZ !== z) {
-          moveTerrainFaunaEntry(dispatch, entry, cellX, cellZ);
-          continue;
-        }
-        memory[p.VHGNDmii] = entry.mammalBefore;
-        memory[p.VHGNDbii] = entry.birdBefore;
-        memory[p.VHGNDfaunamid] = entry.mammalId;
-        memory[p.VHGNDfaunabid] = entry.birdId;
-        memory[p.VHGNDanip] = entry.record;
-        memory[p.VHGNDanix] = worldX;
-        memory[p.VHGNDaniz] = worldZ;
-        memory[p.VHGNDviewrz] = 1;
-        memory[p.VHGNDanii] = entry.index;
-        machine.C = entry.record;
-        machine.callCode(entry.mammal ? animals : birds);
-        const nextX = memory[entry.record] | 0;
-        const nextZ = memory[entry.record + 1] | 0;
-        moveTerrainFaunaEntry(dispatch, entry,
-          Math.max(0, Math.min(199, (nextX / 16384) | 0)),
-          Math.max(0, Math.min(199, (nextZ / 16384) | 0)));
-      }
-    }
-    memory[p.VHGNDmii] = dispatch.animalCount;
-    memory[p.VHGNDbii] = dispatch.birdCount;
-    memory[p.VHGNDfaunamid] = 0x7fffffff;
-    memory[p.VHGNDfaunabid] = 0x7fffffff;
-    if (dispatch.last) {
-      const worldX = memory[dispatch.last.record] | 0;
-      const worldZ = memory[dispatch.last.record + 1] | 0;
-      memory[p.VHGNDanip] = dispatch.last.record;
-      memory[p.VHGNDanix] = worldX;
-      memory[p.VHGNDaniz] = worldZ;
-      memory[p.VHGNDviewrz] = Math.max(0, Math.min(199, (worldX / 16384) | 0)) === x
-        && Math.max(0, Math.min(199, (worldZ / 16384) | 0)) === z ? 1 : 0;
-      machine.C = dispatch.last.record;
-    }
-    memory[p.VHGNDanisingle] = 0;
-    memory[p.SPskipmid] = 0;
-    machine.A = 0x7fffffff;
-    machine.X = LINO_DONE;
-    return;
-  }
-  let mammal = 0;
-  let bird = 0;
-  const animalCount = memory[p.VHGNDanimals] >>> 0;
-  const birdCount = memory[p.VHGNDbirds] >>> 0;
+  const tile = Math.imul(z, 200) + x;
+  const population = memory[p.VHGNDpopulation] >>> 0;
+  memory[p.VHGNDfaunatilecurrent] = tile;
+  memory[p.VHGNDfaunaid] = 0;
   memory[p.VHGNDmii] = 0;
   memory[p.VHGNDbii] = 0;
   memory[p.VHGNDanisingle] = 1;
-  while (mammal < animalCount || bird < birdCount) {
-    const mammalRecord = p.VHGNDanidata + mammal * 10;
-    const birdRecord = p.VHGNDbirddata + bird * 12;
-    const mammalId = mammal < animalCount ? memory[mammalRecord + 9] >>> 0 : 0x7fffffff;
-    const birdId = bird < birdCount ? memory[birdRecord + 10] >>> 0 : 0x7fffffff;
-    memory[p.VHGNDfaunamid] = mammalId;
-    memory[p.VHGNDfaunabid] = birdId;
-    const chooseMammal = mammalId < birdId;
-    const record = chooseMammal ? mammalRecord : birdRecord;
-    memory[p.VHGNDanip] = record;
-    memory[p.VHGNDanix] = memory[record];
-    memory[p.VHGNDaniz] = memory[record + 1];
-    machine.C = record;
-    const cellX = Math.max(0, Math.min(199, (memory[p.VHGNDanix] / 16384) | 0));
-    const cellZ = Math.max(0, Math.min(199, (memory[p.VHGNDaniz] / 16384) | 0));
-    const matches = cellX === x && cellZ === z;
-    memory[p.VHGNDviewrz] = matches ? 1 : 0;
-    if (matches) {
-      memory[p.VHGNDanii] = chooseMammal ? mammal : bird;
-      machine.callCode(chooseMammal ? animals : birds);
+  for (let id = 0; id < population; id += 1) {
+    memory[p.VHGNDfaunaid] = id;
+    const type = memory[p.VHGNDfaunatypes + id] | 0;
+    let record;
+    if (type === 1) {
+      const bird = memory[p.VHGNDbii] | 0;
+      record = p.VHGNDbirddata + bird * 12;
+      if ((memory[p.VHGNDfaunatiles + id] | 0) === tile) {
+        memory[p.VHGNDanii] = bird;
+        machine.callCode(birds);
+        memory[p.VHGNDfaunap] = record;
+        memory[p.VHGNDfaunatiles + id] = terrainFaunaTileKey(memory, record);
+      }
+      memory[p.VHGNDbii] = bird + 1;
+    } else if (type === 5) {
+      const mammal = memory[p.VHGNDmii] | 0;
+      record = p.VHGNDanidata + mammal * 10;
+      if ((memory[p.VHGNDfaunatiles + id] | 0) === tile) {
+        memory[p.VHGNDanii] = mammal;
+        machine.callCode(animals);
+        memory[p.VHGNDfaunap] = record;
+        memory[p.VHGNDfaunatiles + id] = terrainFaunaTileKey(memory, record);
+      }
+      memory[p.VHGNDmii] = mammal + 1;
     }
-    if (chooseMammal) {
-      mammal += 1;
-      memory[p.VHGNDmii] = mammal;
-    } else {
-      bird += 1;
-      memory[p.VHGNDbii] = bird;
-    }
+    memory[p.VHGNDfaunaid] = id + 1;
   }
-  memory[p.VHGNDfaunamid] = 0x7fffffff;
-  memory[p.VHGNDfaunabid] = 0x7fffffff;
   memory[p.VHGNDanisingle] = 0;
   memory[p.SPskipmid] = 0;
-  machine.A = 0x7fffffff;
+  machine.A = population;
   machine.X = LINO_DONE;
 }
 
-function moveTerrainFaunaEntry(dispatch, entry, cellX, cellZ) {
-  if (entry.cellX === cellX && entry.cellZ === cellZ) return;
-  const oldKey = entry.cellZ * 200 + entry.cellX;
-  const oldEntries = dispatch.byCell.get(oldKey);
-  const oldIndex = oldEntries?.indexOf(entry) ?? -1;
-  if (oldIndex >= 0) {
-    oldEntries.splice(oldIndex, 1);
-    if (oldEntries.length === 0) dispatch.byCell.delete(oldKey);
-  }
-  entry.cellX = cellX;
-  entry.cellZ = cellZ;
-  const key = cellZ * 200 + cellX;
-  const entries = dispatch.byCell.get(key);
-  if (!entries) dispatch.byCell.set(key, [entry]);
-  else {
-    let index = entries.length;
-    while (index > 0 && entries[index - 1].order > entry.order) index -= 1;
-    entries.splice(index, 0, entry);
-  }
-}
-
-function prepareTerrainFaunaDispatch(machine, p) {
-  const memory = machine.memory;
-  const animalCount = memory[p.VHGNDanimals] >>> 0;
-  const birdCount = memory[p.VHGNDbirds] >>> 0;
-  const byCell = new Map();
-  let mammal = 0;
-  let bird = 0;
-  let order = 0;
-  let last = null;
-  while (mammal < animalCount || bird < birdCount) {
-    const mammalRecord = p.VHGNDanidata + mammal * 10;
-    const birdRecord = p.VHGNDbirddata + bird * 12;
-    const mammalId = mammal < animalCount ? memory[mammalRecord + 9] >>> 0 : 0x7fffffff;
-    const birdId = bird < birdCount ? memory[birdRecord + 10] >>> 0 : 0x7fffffff;
-    const chooseMammal = mammalId < birdId;
-    const record = chooseMammal ? mammalRecord : birdRecord;
-    const worldX = memory[record] | 0;
-    const worldZ = memory[record + 1] | 0;
-    const cellX = Math.max(0, Math.min(199, (worldX / 16384) | 0));
-    const cellZ = Math.max(0, Math.min(199, (worldZ / 16384) | 0));
-    const entry = {
-      order,
-      mammal: chooseMammal,
-      index: chooseMammal ? mammal : bird,
-      record, worldX, worldZ, cellX, cellZ,
-      mammalBefore: mammal, birdBefore: bird, mammalId, birdId,
-    };
-    const key = cellZ * 200 + cellX;
-    const entries = byCell.get(key);
-    if (entries) entries.push(entry);
-    else byCell.set(key, [entry]);
-    last = entry;
-    order += 1;
-    if (chooseMammal) mammal += 1;
-    else bird += 1;
-  }
-  machine.noctisTerrainFaunaDispatch = { animalCount, birdCount, byCell, last };
+function terrainFaunaTileKey(memory, record) {
+  const x = Math.max(0, Math.min(199, Math.trunc((memory[record] | 0) / 16384)));
+  const z = Math.max(0, Math.min(199, Math.trunc((memory[record + 1] | 0) / 16384)));
+  return Math.imul(z, 200) + x;
 }
 
 function landedRockAddresses(linked) {
@@ -8296,7 +8185,6 @@ function terrainTileMirror(machine, linked) {
   const step = memory[p.VHGNDlodstep] | 0;
   const manhattan = Math.abs((memory[p.VHGNDcamtx] | 0) - x)
     + Math.abs((memory[p.VHGNDcamtz] | 0) - z);
-  memory[p.VHGNDmanhattan] = manhattan;
   if (manhattan > 90) {
     machine.X = LINO_DONE;
     return;
@@ -8493,10 +8381,6 @@ function terrainTraversalPlan(machine, p, camtx, camtz, backspan, beta) {
 function terrainTraverseFaithful(machine, linked) {
   const memory = machine.memory;
   const p = landedTerrainAddresses(linked);
-  machine.noctisTerrainFaunaDispatch = null;
-  if (!machine.noctisDisableTerrainFaunaBuckets && (memory[p.GRiptype] | 0) === 3) {
-    prepareTerrainFaunaDispatch(machine, p);
-  }
   machine.noctisTerrainBoundsContext = terrainBoundsContext(machine, polymapAddresses(linked));
   const tree = landedTreeRenderAddresses(linked);
   const treeScopeKey = tree.modelKey.slice(5, -1)
@@ -8545,12 +8429,10 @@ function terrainTraverseFaithful(machine, linked) {
     const z = records[record + 1];
     memory[p.VHGNDx] = x;
     memory[p.VHGNDz] = z;
-    memory[p.VHGNDnativecomplete] = 0;
     const manhattan = records[record + 2];
-    memory[p.VHGNDmanhattan] = manhattan;
     const h1 = records[record + 3];
-    if (h1 < 0) memory[p.VHGNDnativecomplete] = 2;
-    else {
+    let completed = 2;
+    if (h1 >= 0) {
       memory[p.VHGNDh1] = h1;
       memory[p.VHGNDdx] = records[record + 4];
       memory[p.VHGNDdz] = records[record + 5];
@@ -8560,11 +8442,9 @@ function terrainTraverseFaithful(machine, linked) {
       const raw = records[record + 7];
       memory[p.VHGNDrawdepth] = raw;
       memory[p.VHGNDdepth] = Math.max(raw - 1, 0);
-      if (!machine.noctisDisableTerrainTileCore) {
-        landedTerrainTileCore(machine, linked, manhattan, raw);
-      }
+      completed = machine.noctisDisableTerrainTileCore
+        ? 0 : landedTerrainTileCore(machine, linked, manhattan, raw);
     }
-    const completed = memory[p.VHGNDnativecomplete] | 0;
     if (completed === 0) machine.callCode(fullTile);
     else if (completed === 1) renderTerrainTileDetails(
       machine, linked, p, detailHandles, x, z,
@@ -12029,9 +11909,9 @@ function terrainFacingPairDirect(machine, ground) {
     let normalY;
     let normalZ;
     if ((memory[ground.VHGNDnormstamp + index] | 0) === generation) {
-      normalX = float32FromBits(memory[ground.VHGNDnormx + index]);
-      normalY = float32FromBits(memory[ground.VHGNDnormy + index]);
-      normalZ = float32FromBits(memory[ground.VHGNDnormz + index]);
+      normalX = terrainCachedFloat(memory, ground.VHGNDnormx0, ground.VHGNDnormx1, index);
+      normalY = terrainCachedFloat(memory, ground.VHGNDnormy0, ground.VHGNDnormy1, index);
+      normalZ = terrainCachedFloat(memory, ground.VHGNDnormz0, ground.VHGNDnormz1, index);
     } else {
       control ??= floatingPoint(machine).control;
       const y0 = -((triangle === 0
@@ -12054,9 +11934,9 @@ function terrainFacingPairDirect(machine, ground) {
       normalX = roundFloat32(edge1Y * edge2Z - edge1Z * edge2Y, control);
       normalY = roundFloat32(edge1Z * edge2X - edge1X * edge2Z, control);
       normalZ = roundFloat32(edge1X * edge2Y - edge1Y * edge2X, control);
-      memory[ground.VHGNDnormx + index] = float32Bits(normalX);
-      memory[ground.VHGNDnormy + index] = float32Bits(normalY);
-      memory[ground.VHGNDnormz + index] = float32Bits(normalZ);
+      storeTerrainCachedFloat(memory, ground.VHGNDnormx0, ground.VHGNDnormx1, index, normalX);
+      storeTerrainCachedFloat(memory, ground.VHGNDnormy0, ground.VHGNDnormy1, index, normalY);
+      storeTerrainCachedFloat(memory, ground.VHGNDnormz0, ground.VHGNDnormz1, index, normalZ);
       memory[ground.VHGNDnormstamp + index] = generation;
     }
     let dot = (cameraX - vertexX) * normalX;
@@ -12192,13 +12072,9 @@ function landedTerrainTileOnScreen(machine, p, polygon, h1,
 function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
   const memory = machine.memory;
   const p = landedTerrainAddresses(linked);
-  const done = p.VHGNDnativecomplete;
   if ((memory[p.VHGNDmirror] | 0) !== 0
-      || (memory[p.VHGNDruinpass] | 0) !== 0) return;
-  if (manhattan > 90 || rawDepth > 64) {
-    memory[done] = 2;
-    return;
-  }
+      || (memory[p.VHGNDruinpass] | 0) !== 0) return 0;
+  if (manhattan > 90 || rawDepth > 64) return 2;
 
   const depth = memory[p.VHGNDdepth] | 0;
   terrainTileShadeDirect(machine, p);
@@ -12216,10 +12092,7 @@ function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
   memory[p.VHGNDs3] = height2; memory[p.VHGNDs4] = height3;
   if ((memory[p.GRiptype] | 0) === 3
       && (memory[p.VHGNDsctype] | 0) === 1
-      && height0 + height1 + height2 + height3 === 0) {
-    memory[done] = 2;
-    return;
-  }
+      && height0 + height1 + height2 + height3 === 0) return 2;
 
   let ruined = 0;
   if ((memory[p.VHGNDruinanchor] | 0) !== 0
@@ -12249,10 +12122,7 @@ function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
   const facing1 = (facingMask & 2) !== 0;
   const facingCount = (facing0 ? 1 : 0) + (facing1 ? 1 : 0);
   memory[p.VHGNDtilepolys] = facingCount;
-  if (facingCount === 0) {
-    memory[done] = 1;
-    return;
-  }
+  if (facingCount === 0) return 1;
   memory[p.PGtexf] = 5;
 
   for (let triangle = 0; triangle < 2; triangle += 1) {
@@ -12262,7 +12132,7 @@ function landedTerrainTileCore(machine, linked, manhattan, rawDepth) {
     terrainMapped(machine, linked);
   }
   memory[p.VHGNDvctri] = 1;
-  memory[done] = 1;
+  return 1;
 }
 
 function landedTerrainTriangle(machine, linked) {
@@ -12617,15 +12487,18 @@ function terrainFacing(machine, linked) {
   const stamp = p.VHGNDnormstamp;
   if ((memory[stamp + index] | 0) !== generation) {
     mappedFacing(machine, linked);
-    memory[p.VHGNDnormx + index] = float32Bits(readFloat64View(view, floats + 470));
-    memory[p.VHGNDnormy + index] = float32Bits(readFloat64View(view, floats + 472));
-    memory[p.VHGNDnormz + index] = float32Bits(readFloat64View(view, floats + 474));
+    memory[p.VHGNDnormx0 + index] = memory[floats + 470];
+    memory[p.VHGNDnormx1 + index] = memory[floats + 471];
+    memory[p.VHGNDnormy0 + index] = memory[floats + 472];
+    memory[p.VHGNDnormy1 + index] = memory[floats + 473];
+    memory[p.VHGNDnormz0 + index] = memory[floats + 474];
+    memory[p.VHGNDnormz1 + index] = memory[floats + 475];
     memory[stamp + index] = generation;
     return;
   }
-  const normalX = float32FromBits(memory[p.VHGNDnormx + index]);
-  const normalY = float32FromBits(memory[p.VHGNDnormy + index]);
-  const normalZ = float32FromBits(memory[p.VHGNDnormz + index]);
+  const normalX = terrainCachedFloat(memory, p.VHGNDnormx0, p.VHGNDnormx1, index);
+  const normalY = terrainCachedFloat(memory, p.VHGNDnormy0, p.VHGNDnormy1, index);
+  const normalZ = terrainCachedFloat(memory, p.VHGNDnormz0, p.VHGNDnormz1, index);
   let dot = (readFloat64View(view, floats + 448) - readFloat64View(view, floats + 508)) * normalX;
   dot = (readFloat64View(view, floats + 450) - readFloat64View(view, floats + 516)) * normalY + dot;
   dot = (readFloat64View(view, floats + 452) - readFloat64View(view, floats + 524)) * normalZ + dot;

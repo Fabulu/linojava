@@ -69,6 +69,8 @@ function exerciseDirectNoctisWorkspaces(linked) {
     "PJfwbase", "PGfwbase", "VHSfwbase", "PJmpbase", "PJipartbase",
     "PGipartbase", "PJrwfbase", "PGnwbase", "PGfpartbase", "VHGNDdensebase",
     "PJthird0", "PJthird1", "PGUVZ", "PGUVX", "PGUVY", "PGUVK4",
+    "VHGNDnativecomplete", "VHGNDnormx", "VHGNDnormy", "VHGNDnormz",
+    "VHGNDfaunamid", "VHGNDfaunabid", "VHGNDmanhattan",
   ]) {
     assert.equal(linked.symbols.has(canonicalName(name)), false, `${name} is not a source symbol`);
   }
@@ -110,6 +112,36 @@ function exerciseDirectNoctisWorkspaces(linked) {
   machine.memory[at("PJdoflag")] = 0;
   intrinsics[SERVICES.polymap](machine, linked);
   assert.equal(machine.memory[at("PJgate")], 1);
+  intrinsics[SERVICES.surroundingBorder](machine, linked);
+
+  const birdRecord = at("VHGNDbirddata");
+  const mammalRecord = at("VHGNDanidata");
+  const bird = linked.labels.get(canonicalName("VHGND render birds")) + 1;
+  const mammal = linked.labels.get(canonicalName("VHGND render animals")) + 1;
+  const calls = [];
+  machine.callCode = (handle) => {
+    calls.push(handle);
+    const record = handle === bird ? birdRecord : mammalRecord;
+    machine.memory[record] = handle === bird ? 5 * 16384 : -1;
+    machine.memory[record + 1] = handle === bird ? 6 * 16384 : 400 * 16384;
+  };
+  machine.memory[at("GRiptype")] = 3;
+  machine.memory[at("VHGNDx")] = 4;
+  machine.memory[at("VHGNDz")] = 3;
+  machine.memory[at("VHGNDpopulation")] = 3;
+  machine.memory[at("VHGNDfaunatypes")] = 1;
+  machine.memory[at("VHGNDfaunatypes") + 1] = 2;
+  machine.memory[at("VHGNDfaunatypes") + 2] = 5;
+  machine.memory[at("VHGNDfaunatiles")] = 604;
+  machine.memory[at("VHGNDfaunatiles") + 2] = 604;
+  intrinsics[SERVICES.terrainTileFauna](machine, linked);
+  assert.deepEqual(calls, [bird, mammal]);
+  assert.equal(machine.memory[at("VHGNDfaunatiles")], 1205);
+  assert.equal(machine.memory[at("VHGNDfaunatiles") + 2], 39800);
+  assert.equal(machine.memory[at("VHGNDfaunaid")], 3);
+  assert.equal(machine.memory[at("VHGNDmii")], 1);
+  assert.equal(machine.memory[at("VHGNDbii")], 1);
+  assert.equal(machine.memory[at("VHGNDanisingle")], 0);
 }
 
 test("current shared Noctis and NIVGEN closures emit static runners", {
