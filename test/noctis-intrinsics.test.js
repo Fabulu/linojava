@@ -36,6 +36,8 @@ function fixture() {
     "mp", "rwf", "PJnrv", "PJvr", "PJvr2", "PJvr22",
     "PJdoflag", "FCWSAV", "FCWTMP", "FSW", "FCWCSAV", "FCWCHOP",
     "FI", "FA0", "FB0", "FS0", "FT0", "PGFi", "PGFj", "PGFt", "PGFu", "fw",
+    "xua", "xub", "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1",
+    "xup2", "xup3", "xutmp", "xumid", "xulo", "xuhi",
     "FC0", "FD0", "FJ0", "FJ1", "FJ2", "FKNsIdentitySpill1t0",
     "FKNsIdentitySpill2t0", "FKNsIdentitySpill3t0", "FKNsIdentitySpill4t0",
     "FKNsIdentitySpillAllt0", "FKIsThereIdentityK1EM50", "FKProd4Spilledt0",
@@ -98,6 +100,95 @@ function fixture() {
     at(name) { return symbols.get(canonicalName(name)).value; },
   };
 }
+
+test("unsigned multiply service preserves exact shared Lino scratch state", () => {
+  const intrinsic = createNoctisIntrinsics();
+  const { linked, machine, at } = fixture();
+  const memory = machine.memory;
+  const scratch = [
+    "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1", "xup2", "xup3",
+    "xutmp", "xumid", "xulo", "xuhi",
+  ];
+  const canary = 1_900_000;
+  memory[canary] = 0x13579bdf;
+  memory[canary + 1] = -0x2468ace;
+  machine.C = -123456789;
+  machine.D = 0x76543210;
+  machine.E = -987654321;
+  machine.stack = Int32Array.from([17, -23, 42, 99]);
+  machine.depth = 3;
+  machine.halted = false;
+
+  const invoke = (left, right, verifyScratch = true) => {
+    memory[at("xua")] = left;
+    memory[at("xub")] = right;
+    for (const name of scratch) memory[at(name)] = 0x55555555;
+
+    intrinsic[SERVICES.xMul32u](machine, linked);
+
+    const ua = left >>> 0;
+    const ub = right >>> 0;
+    const l0 = ua & 0xffff;
+    const h0 = ua >>> 16;
+    const l1 = ub & 0xffff;
+    const h1 = ub >>> 16;
+    const p0 = Math.imul(l0, l1) | 0;
+    const p1 = Math.imul(l0, h1) | 0;
+    const p2 = Math.imul(h0, l1) | 0;
+    const p3 = Math.imul(h0, h1) | 0;
+    const middle = ((p2 & 0xffff) + (p1 & 0xffff) + (p0 >>> 16)) | 0;
+    const temporary = ((middle & 0xffff) << 16) | 0;
+    const product = BigInt(ua) * BigInt(ub);
+    const low = Number(product & 0xffffffffn) | 0;
+    const high = Number((product >> 32n) & 0xffffffffn) | 0;
+    const expected = {
+      xul0: l0, xuh0: h0, xul1: l1, xuh1: h1,
+      xup0: p0, xup1: p1, xup2: p2, xup3: p3,
+      xutmp: temporary, xumid: middle, xulo: low, xuhi: high,
+    };
+    if (memory[at("xulo")] !== low || memory[at("xuhi")] !== high
+      || machine.A !== high || machine.B !== (middle >>> 16)
+      || machine.X !== 0x646f6e65 || memory[at("xua")] !== (left | 0)
+      || memory[at("xub")] !== (right | 0)) {
+      assert.fail(`unsigned multiply mismatch for ${ua.toString(16)} * ${ub.toString(16)}`);
+    }
+    if (verifyScratch) {
+      for (const [name, value] of Object.entries(expected)) {
+        assert.equal(memory[at(name)], value, `${name} for ${ua.toString(16)} * ${ub.toString(16)}`);
+      }
+    }
+  };
+
+  const edges = [
+    0, 1, 0xffff, 0x10000, 0x7fffffff, 0x80000000,
+    0xfffffffe, 0xffffffff,
+  ];
+  for (const left of edges) {
+    for (const right of edges) invoke(left, right);
+  }
+  for (let limb = 0; limb <= 0xffff; limb += 1) {
+    invoke(limb, 0x8001ffff, false);
+    invoke(limb << 16, 0x8001ffff, false);
+    invoke(0xffff8001, limb, false);
+    invoke(0xffff8001, limb << 16, false);
+  }
+  let random = 0x6d2b79f5;
+  for (let index = 0; index < 4096; index += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    const left = random;
+    random = (Math.imul(random, 1664525) + 1013904223) | 0;
+    invoke(left, random, (index & 255) === 0);
+  }
+
+  assert.equal(machine.C, -123456789);
+  assert.equal(machine.D, 0x76543210);
+  assert.equal(machine.E, -987654321);
+  assert.deepEqual([...machine.stack], [17, -23, 42, 99]);
+  assert.equal(machine.depth, 3);
+  assert.equal(machine.halted, false);
+  assert.equal(memory[canary], 0x13579bdf);
+  assert.equal(memory[canary + 1], -0x2468ace);
+});
 
 test("surface blur service preserves the shared Lino loop", () => {
   const intrinsic = createNoctisIntrinsics();

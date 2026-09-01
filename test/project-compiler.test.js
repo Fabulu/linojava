@@ -5,6 +5,10 @@ import {
 } from "../src/compiler/project-compiler.js";
 import { linkProject } from "../src/compiler/linker.js";
 import { loadProject } from "../src/compiler/project-loader.js";
+import {
+  createNoctisIntrinsics,
+  NOCTIS_SERVICE_INTRINSIC_IDS as NOCTIS_SERVICES,
+} from "../src/intrinsics/noctis.js";
 
 test("project compiler uses one shared data/call stack and preserves Lino status", async () => {
   const source = `
@@ -118,6 +122,101 @@ test("direct calls use an available portable service fast path", async () => {
   assert.equal(program.run(10).status, "halted");
   assert.equal(calls, 1);
   assert.equal(program.machine.memory[program.linked.symbols.get("result").value], 42);
+});
+
+test("static unsigned multiply service matches its shared Lino fallback", async () => {
+  const source = `
+    "constants" XM16 = 65535;
+    "variables"
+      xua = 0; xub = 0;
+      xul0 = 0; xuh0 = 0; xul1 = 0; xuh1 = 0;
+      xup0 = 0; xup1 = 0; xup2 = 0; xup3 = 0;
+      xutmp = 0; xumid = 0; xulo = 0; xuhi = 0;
+    "programme"
+      => XMul32u;
+      end;
+    "XMul32u"
+      A = [xua]; A & XM16; [xul0] = A;
+      A = [xua]; A > 16; A & XM16; [xuh0] = A;
+      A = [xub]; A & XM16; [xul1] = A;
+      A = [xub]; A > 16; A & XM16; [xuh1] = A;
+      A = [xul0]; A '* [xul1]; [xup0] = A;
+      A = [xul0]; A '* [xuh1]; [xup1] = A;
+      A = [xuh0]; A '* [xul1]; [xup2] = A;
+      A = [xuh0]; A '* [xuh1]; [xup3] = A;
+      A = [xup0]; A > 16; [xutmp] = A;
+      A = [xup1]; A & XM16; A + [xutmp]; [xutmp] = A;
+      A = [xup2]; A & XM16; A + [xutmp]; [xumid] = A;
+      A = [xumid]; A & XM16; A < 16; [xutmp] = A;
+      A = [xup0]; A & XM16; A | [xutmp]; [xulo] = A;
+      A = [xup3];
+      B = [xup1]; B > 16; A + B;
+      B = [xup2]; B > 16; A + B;
+      B = [xumid]; B > 16; A + B; [xuhi] = A;
+      end;
+  `;
+  const project = await loadProject("xmul32u-service.lino", { resolveSource() { return source; } });
+  const linked = linkProject(project);
+  const allIntrinsics = createNoctisIntrinsics();
+  const directImplementation = allIntrinsics[NOCTIS_SERVICES.xMul32u];
+  const intrinsics = { [NOCTIS_SERVICES.xMul32u]: directImplementation };
+  const moduleSource = emitStaticRunnerModule(linked, intrinsics, { regionSize: 256 });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const fallback = compileLinkedProject(linked, {}, { regionSize: 256 });
+  let serviceCalls = 0;
+  const direct = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    intrinsics: {
+      [NOCTIS_SERVICES.xMul32u](machine, directLinked) {
+        serviceCalls += 1;
+        directImplementation(machine, directLinked);
+      },
+    },
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    intrinsics,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const names = [
+    "xua", "xub", "xul0", "xuh0", "xul1", "xuh1", "xup0", "xup1",
+    "xup2", "xup3", "xutmp", "xumid", "xulo", "xuhi",
+  ];
+  const pairs = [
+    [0, 0], [1, -1], [-1, -1], [0x7fffffff, -0x80000000],
+    [0x0000ffff, 0xffff0000], [-123456789, 987654321],
+  ];
+  for (const [left, right] of pairs) {
+    for (const program of [fallback, direct, precompiled]) {
+      program.reset();
+      program.machine.memory[linked.symbols.get("xua").value] = left;
+      program.machine.memory[linked.symbols.get("xub").value] = right;
+      program.machine.C = -101;
+      program.machine.D = 202;
+      program.machine.E = -303;
+      program.machine.X = 0x6661696c;
+      assert.equal(program.run(100).status, "halted");
+    }
+    const expected = Object.fromEntries(names.map((name) => [
+      name, fallback.machine.memory[linked.symbols.get(name).value],
+    ]));
+    for (const program of [direct, precompiled]) {
+      assert.deepEqual(Object.fromEntries(names.map((name) => [
+        name, program.machine.memory[linked.symbols.get(name).value],
+      ])), expected);
+      assert.deepEqual(
+        [program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+          program.machine.E, program.machine.X, program.machine.depth],
+        [fallback.machine.A, fallback.machine.B, fallback.machine.C, fallback.machine.D,
+          fallback.machine.E, fallback.machine.X, fallback.machine.depth],
+      );
+    }
+  }
+  assert.equal(serviceCalls, pairs.length);
 });
 
 test("unsigned arithmetic, postfix NOT, and float predicates lower to JavaScript", async () => {
