@@ -98,6 +98,31 @@ function splitMultiplyInstruction(instruction) {
   return `${left.setup} ${right.setup} u=${left.read};v=${right.read};q=Math.imul(u,v);${left.write("q")}${right.write(high)}`;
 }
 
+function structuredInstruction(instruction) {
+  switch (instruction.op) {
+    case "assign": return destination(instruction.destination, expression(instruction.source));
+    case "increment": return updateDestination(instruction.destination, (left) => `((${left}) + 1)`);
+    case "decrement": return updateDestination(instruction.destination, (left) => `((${left}) - 1)`);
+    case "unary": return updateDestination(instruction.destination, (left) => instruction.operator === "!" ? `~(${left})` : `-(${left})`);
+    case "binary":
+      if (instruction.operator.endsWith(":") || instruction.operator === ":=") {
+        return binary64Instruction(instruction);
+      }
+      if (instruction.operator === "*%" || instruction.operator === "*%'") {
+        return splitMultiplyInstruction(instruction);
+      }
+      return updateDestination(instruction.destination, (left) => integerBinary(instruction.operator, left, expression(instruction.source)));
+    case "binary64-narrow": return `q=${binary64Address(instruction.destination)};f64w(q,Math.fround(f64r(q)));`;
+    case "swap": {
+      const left = destinationReference(instruction.destination, "swapLeft");
+      const right = destinationReference(instruction.source, "swapRight");
+      return `${left.setup} ${right.setup} u = ${left.read}; v = ${right.read}; ${left.write("v")} ${right.write("u")}`;
+    }
+    case "nop": return "";
+    default: return null;
+  }
+}
+
 function integerBinary(operator, left, right) {
   if (operator === "+") return `((${left}) + (${right}))`;
   if (operator === "-") return `((${left}) - (${right}))`;
@@ -148,32 +173,26 @@ function returnInstruction(status, index) {
   return `${setStatus} if (d === 0) { pc = ${index}; halted = true; ${finishRunner("halted", "executed")} } pc = (s[--d] | 0) - 1; continue runner;`;
 }
 
+function instructionPrefix(instruction, count, profile) {
+  const sampled = profile ? `prof[${instruction.index}]=(prof[${instruction.index}]+1)>>>0;` : "";
+  return `${sampled}${count}`;
+}
+
 function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceInlines = new Map(), count = "", profile = false, branchFallthrough = true) {
   const next = instruction.index + 1;
-  const sampled = profile ? `prof[${instruction.index}]=(prof[${instruction.index}]+1)>>>0;` : "";
-  count = `${sampled}${count}`;
+  count = instructionPrefix(instruction, count, profile);
   let code;
   switch (instruction.op) {
-    case "assign": code = destination(instruction.destination, expression(instruction.source)); break;
-    case "increment": code = updateDestination(instruction.destination, (left) => `((${left}) + 1)`); break;
-    case "decrement": code = updateDestination(instruction.destination, (left) => `((${left}) - 1)`); break;
-    case "unary": code = updateDestination(instruction.destination, (left) => instruction.operator === "!" ? `~(${left})` : `-(${left})`); break;
+    case "assign":
+    case "increment":
+    case "decrement":
+    case "unary":
     case "binary":
-      if (instruction.operator.endsWith(":") || instruction.operator === ":=") {
-        code = binary64Instruction(instruction);
-      } else if (instruction.operator === "*%" || instruction.operator === "*%'") {
-        code = splitMultiplyInstruction(instruction);
-      } else {
-        code = updateDestination(instruction.destination, (left) => integerBinary(instruction.operator, left, expression(instruction.source)));
-      }
+    case "binary64-narrow":
+    case "swap":
+    case "nop":
+      code = structuredInstruction(instruction);
       break;
-    case "binary64-narrow": code = `q=${binary64Address(instruction.destination)};f64w(q,Math.fround(f64r(q)));`; break;
-    case "swap": {
-      const left = destinationReference(instruction.destination, "swapLeft");
-      const right = destinationReference(instruction.source, "swapRight");
-      code = `${left.setup} ${right.setup} u = ${left.read}; v = ${right.read}; ${left.write("v")} ${right.write("u")}`;
-      break;
-    }
     case "push": code = push(expression(instruction.source)); break;
     case "pop": code = `if (d === 0) throw new RangeError("Lino stack underflow"); u = s[--d] | 0; ${destination(instruction.destination, "u")}`; break;
     case "push-all": code = ["A", "B", "C", "D", "E"].map(push).join(" "); break;
@@ -210,7 +229,6 @@ function emitInstruction(instruction, serviceIntrinsicIds = new Set(), serviceIn
     case "end": return `case ${instruction.index}: { ${count} ${returnInstruction(DONE, instruction.index)} }`;
     case "fail": return `case ${instruction.index}: { ${count} ${returnInstruction(FAIL, instruction.index)} }`;
     case "leave": return `case ${instruction.index}: { ${count} ${returnInstruction(null, instruction.index)} }`;
-    case "nop": code = ""; break;
     default: throw new SyntaxError(`Cannot emit Lino instruction ${instruction.op}`);
   }
   return `case ${instruction.index}: { ${count} ${code} pc = ${next}; }`;
@@ -248,6 +266,59 @@ function budgetCounts(linked, instructions, serviceIntrinsicIds) {
   return counts;
 }
 
+function structuredSelfBackedges(linked, instructions, serviceIntrinsicIds, counts, labels) {
+  if (labels === undefined) return new Map();
+  if (!Array.isArray(labels) && !(labels instanceof Set)) {
+    throw new TypeError("structuredSelfBackedgeLabels must be an array or Set");
+  }
+  const present = new Map(instructions.map((instruction, index) => [instruction.index, index]));
+  const blocks = new Map();
+  for (const requested of labels) {
+    const name = canonicalCodeName(String(requested));
+    const start = linked.labels.get(name);
+    if (start === undefined) throw new SyntaxError(`Unknown structured self-backedge label ${requested}`);
+    const position = present.get(start);
+    if (position === undefined) continue;
+    const body = [];
+    for (let offset = position; offset < instructions.length; offset += 1) {
+      const instruction = instructions[offset];
+      if (offset !== position && counts.has(instruction.index)) {
+        throw new SyntaxError(`Structured self-backedge ${requested} contains an interior entry at ${instruction.index}`);
+      }
+      body.push(instruction);
+      if (!fallsThrough(instruction, serviceIntrinsicIds)) break;
+    }
+    const terminal = body.at(-1);
+    if (!terminal || fallsThrough(terminal, serviceIntrinsicIds)) {
+      throw new SyntaxError(`Structured self-backedge ${requested} crosses its generated runner region`);
+    }
+    if (terminal.op !== "branch" || terminal.target.kind !== "immediate"
+        || ((terminal.target.value | 0) - 1) !== start) {
+      throw new SyntaxError(`Structured self-backedge ${requested} does not end in a direct branch to itself`);
+    }
+    for (const instruction of body.slice(0, -1)) {
+      if (structuredInstruction(instruction) === null) {
+        throw new SyntaxError(`Structured self-backedge ${requested} contains unsupported ${instruction.op}`);
+      }
+    }
+    blocks.set(start, body);
+  }
+  return blocks;
+}
+
+function emitStructuredSelfBackedge(body, counts, profile) {
+  const start = body[0].index;
+  const terminal = body.at(-1);
+  const loop = `selfBackedge${start}`;
+  const code = body.slice(0, -1).map((instruction) => (
+    `${instructionPrefix(instruction, counts.get(instruction.index) ?? "", profile)}${structuredInstruction(instruction)}`
+  )).join("");
+  const terminalPrefix = instructionPrefix(
+    terminal, counts.get(terminal.index) ?? "", profile,
+  );
+  return `case ${start}: { ${loop}:while(true){${code}${terminalPrefix}if(${predicate(terminal)}){pc=${start};continue ${loop};}pc=${terminal.index + 1};break ${loop};}continue runner; }`;
+}
+
 export function emitRunner(linked, options = {}) {
   const instructions = options.instructions ?? lowerOperands(linked);
   const serviceIntrinsicIds = options.serviceIntrinsicIds ?? new Set();
@@ -256,10 +327,20 @@ export function emitRunner(linked, options = {}) {
     ? new Map(instructions.map((instruction) => [instruction.index,
       `if(executed>=maxInstructions){pc=${instruction.index};${finishRunner("budget", "executed")}}executed+=1;`]))
     : budgetCounts(linked, instructions, serviceIntrinsicIds);
-  const cases = instructions.map((instruction) => emitInstruction(
-    instruction, serviceIntrinsicIds, serviceInlines, counts.get(instruction.index) ?? "",
-    options.profileInstructions === true, options.branchFallthrough !== false,
-  )).join("\n");
+  const selfBackedges = structuredSelfBackedges(
+    linked, instructions, serviceIntrinsicIds, counts, options.structuredSelfBackedgeLabels,
+  );
+  const cases = instructions.map((instruction) => {
+    const body = selfBackedges.get(instruction.index);
+    if (body) return emitStructuredSelfBackedge(
+      body, counts, options.profileInstructions === true,
+    );
+    return emitInstruction(
+      instruction, serviceIntrinsicIds, serviceInlines,
+      counts.get(instruction.index) ?? "", options.profileInstructions === true,
+      options.branchFallthrough !== false,
+    );
+  }).join("\n");
   const defaultCase = options.transfer
     ? `default: ${finishRunner("transfer", "executed")}`
     : `default: halted=true; ${finishRunner("halted", "executed")}`;
@@ -318,6 +399,7 @@ export function emitStaticRunnerModule(linked, implementations, options = {}) {
       instructions, serviceIntrinsicIds, serviceInlines,
       batchBudgets: options.batchBudgets,
       branchFallthrough: options.branchFallthrough,
+      structuredSelfBackedgeLabels: options.structuredSelfBackedgeLabels,
       transfer: true,
     });
     factories.push(`function ${name}(dispatch, native) {${source}\n}`);
@@ -367,6 +449,7 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
         instructions, serviceIntrinsicIds, serviceInlines,
         batchBudgets: options.batchBudgets, profileInstructions: options.profileInstructions,
         branchFallthrough: options.branchFallthrough,
+        structuredSelfBackedgeLabels: options.structuredSelfBackedgeLabels,
         transfer: true,
       });
       runners.push(new Function("dispatch", "native",

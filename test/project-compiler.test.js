@@ -755,6 +755,99 @@ test("static runners execute binary64 instructions identically", async () => {
   assert.equal(dynamic.machine.memory[linked.symbols.get("result").value], 26);
 });
 
+test("structured self-backedges preserve budgets, profiles, and interior entry", async () => {
+  const source = `
+    "variables" counter17 = 0; counter26 = 0; scratch = 0;
+    "programme" end;
+    "Loop 17"
+      ${"[scratch]+;".repeat(14)}
+      [counter17]-; A = [counter17]; ? A != 0 -> Loop 17;
+    "Loop 17 done" leave;
+    "Loop 26"
+      ${"[scratch]+;".repeat(23)}
+      [counter26]-; A = [counter26]; ? A != 0 -> Loop 26;
+    "Loop 26 done" leave;
+  `;
+  const project = await loadProject("structured-self-backedge.lino", {
+    resolveSource() { return source; },
+  });
+  const linked = linkProject(project);
+  const labels = ["Loop 17", "Loop 26"];
+  const generatedSource = emitStaticRunnerModule(linked, {}, {
+    regionSize: 256,
+    structuredSelfBackedgeLabels: labels,
+  });
+  assert.match(generatedSource, /selfBackedge/);
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(generatedSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const baseline = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    profileInstructions: true,
+  });
+  const candidate = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    profileInstructions: true,
+    structuredSelfBackedgeLabels: labels,
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const at = (name) => linked.symbols.get(name).value;
+  const initialize = (program, pc) => {
+    program.reset();
+    program.machine.memory[at("counter17")] = 4;
+    program.machine.memory[at("counter26")] = 4;
+    program.machine.memory[at("scratch")] = 0x12345678;
+    program.machine.A = 11;
+    program.machine.B = 13;
+    program.machine.C = 17;
+    program.machine.D = 19;
+    program.machine.E = 23;
+    program.machine.X = 29;
+    for (let index = 0; index < 8; index += 1) {
+      program.machine.stack[index] = (index * 31 + 7) | 0;
+    }
+    program.machine.pc = pc;
+  };
+  const state = (program) => ({
+    memory: [...program.machine.memory],
+    registers: [
+      program.machine.A, program.machine.B, program.machine.C, program.machine.D,
+      program.machine.E, program.machine.X,
+    ],
+    pc: program.machine.pc,
+    halted: program.machine.halted,
+    depth: program.machine.depth,
+    stack: [...program.machine.stack.subarray(0, 8)],
+  });
+  const budgets = [0, 1, 16, 17, 18, 25, 26, 27, 9_999, 10_000, 10_001];
+  for (const [label, done, length] of [
+    ["loop17", "loop17done", 17],
+    ["loop26", "loop26done", 26],
+  ]) {
+    const start = linked.labels.get(label);
+    assert.equal(linked.labels.get(done) - start, length);
+    for (let pc = start; pc < start + length; pc += 1) {
+      for (const budget of budgets) {
+        for (const program of [baseline, candidate, precompiled]) initialize(program, pc);
+        const expected = baseline.run(budget);
+        assert.deepEqual(candidate.run(budget), expected, `${label} pc ${pc} budget ${budget}`);
+        assert.deepEqual(precompiled.run(budget), expected, `${label} static pc ${pc} budget ${budget}`);
+        assert.deepEqual(state(candidate), state(baseline), `${label} state pc ${pc} budget ${budget}`);
+        assert.deepEqual(state(precompiled), state(baseline), `${label} static state pc ${pc} budget ${budget}`);
+        assert.deepEqual(
+          candidate.machine.profile, baseline.machine.profile,
+          `${label} profile pc ${pc} budget ${budget}`,
+        );
+      }
+    }
+  }
+});
+
 test("native fragments require explicit portable intrinsic implementations", async () => {
   const source = '"programme" { DE AD BE EF } ; end;';
   const project = await loadProject("native.lino", { resolveSource() { return source; } });
