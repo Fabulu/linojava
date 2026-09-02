@@ -307,18 +307,176 @@ function structuredSelfBackedges(linked, instructions, serviceIntrinsicIds, coun
   return blocks;
 }
 
-function emitStructuredSelfBackedge(body, counts, profile, sinkFallthroughPc) {
+function selectedCountedSelfBackedges(linked, selfBackedges, labels) {
+  if (labels === undefined) return new Map();
+  if (!Array.isArray(labels) && !(labels instanceof Set)) {
+    throw new TypeError("countedSelfBackedgeLabels must be an array or Set");
+  }
+  const counted = new Map();
+  for (const requested of labels) {
+    const start = linked.labels.get(canonicalCodeName(String(requested)));
+    if (start === undefined) throw new SyntaxError(`Unknown counted self-backedge label ${requested}`);
+    const body = selfBackedges.get(start);
+    if (!body) continue;
+    const descriptor = countedSelfBackedge(body);
+    if (descriptor) counted.set(start, descriptor);
+  }
+  return counted;
+}
+
+function directMemoryAddress(operand) {
+  if (operand?.kind !== "memory" || operand.address.kind !== "immediate") return null;
+  return operand.address.value >>> 0;
+}
+
+function registerWrite(instruction) {
+  if (!new Set(["assign", "increment", "decrement", "unary", "binary"]).has(instruction.op)) {
+    return null;
+  }
+  return instruction.destination.kind === "register" ? instruction.destination.name : null;
+}
+
+function memoryWrite(instruction) {
+  if (!new Set(["assign", "increment", "decrement", "unary", "binary"]).has(instruction.op)) {
+    return null;
+  }
+  return instruction.destination.kind === "memory" ? instruction.destination : null;
+}
+
+function affineAddress(operand) {
+  if (operand.kind === "register") return { register: operand.name, offset: 0 };
+  if (operand.kind !== "arithmetic") return null;
+  if (operand.operator === "add" && operand.left.kind === "register"
+      && operand.right.kind === "immediate") {
+    return { register: operand.left.name, offset: operand.right.value | 0 };
+  }
+  if (operand.operator === "subtract" && operand.left.kind === "register"
+      && operand.right.kind === "immediate") {
+    return { register: operand.left.name, offset: -(operand.right.value | 0) };
+  }
+  return null;
+}
+
+function safeCountedOperand(operand) {
+  if (!operand) return false;
+  if (operand.kind === "immediate" || operand.kind === "register" || operand.kind === "stack") {
+    return true;
+  }
+  if (operand.kind === "memory") return safeCountedOperand(operand.address);
+  if (operand.kind === "negate") return safeCountedOperand(operand.value);
+  if (operand.kind !== "arithmetic"
+      || !new Set(["add", "subtract", "multiply"]).has(operand.operator)) return false;
+  return safeCountedOperand(operand.left) && safeCountedOperand(operand.right);
+}
+
+function safeCountedDestination(operand) {
+  return operand.kind !== "memory" || safeCountedOperand(operand.address);
+}
+
+function safeCountedInstruction(instruction) {
+  if (instruction.op === "nop") return true;
+  if (instruction.op === "assign") {
+    return safeCountedDestination(instruction.destination)
+      && safeCountedOperand(instruction.source);
+  }
+  if (instruction.op === "increment" || instruction.op === "decrement") {
+    return safeCountedDestination(instruction.destination);
+  }
+  if (instruction.op !== "binary"
+      || !new Set(["+", "-", "*", "'*", "&", "|", "#", "<", "<<", ">", ">>", "<@", "@>"])
+        .has(instruction.operator)) return false;
+  return safeCountedDestination(instruction.destination)
+    && safeCountedOperand(instruction.source);
+}
+
+function countedSelfBackedge(body) {
+  if (body.length < 3) return null;
+  const decrement = body.at(-3);
+  const load = body.at(-2);
+  const terminal = body.at(-1);
+  const counterAddress = directMemoryAddress(decrement.destination);
+  if (decrement.op !== "decrement" || counterAddress === null
+      || load.op !== "assign" || load.destination.kind !== "register"
+      || load.destination.name !== "A" || directMemoryAddress(load.source) !== counterAddress
+      || terminal.op !== "branch" || terminal.floating || terminal.unsigned
+      || terminal.operator !== "!=" || terminal.left.kind !== "register"
+      || terminal.left.name !== "A" || terminal.right.kind !== "immediate"
+      || (terminal.right.value | 0) !== 0) {
+    return null;
+  }
+
+  const core = body.slice(0, -3);
+  if (!core.every(safeCountedInstruction)) return null;
+  const spans = new Map();
+  for (let position = 0; position < core.length; position += 1) {
+    const operand = memoryWrite(core[position]);
+    if (!operand) continue;
+    const direct = directMemoryAddress(operand);
+    if (direct !== null) {
+      if (direct === counterAddress) return null;
+      continue;
+    }
+    const affine = affineAddress(operand.address);
+    if (!affine || affine.register === "A" || affine.offset < 0) return null;
+    const span = spans.get(affine.register) ?? { offsets: [], lastWrite: -1, delta: 0 };
+    span.offsets.push(affine.offset);
+    span.lastWrite = position;
+    spans.set(affine.register, span);
+  }
+
+  for (const [register, span] of spans) {
+    for (let position = 0; position < core.length; position += 1) {
+      if (registerWrite(core[position]) !== register) continue;
+      const instruction = core[position];
+      const increment = instruction.op === "increment" ? 1
+        : instruction.op === "binary" && instruction.operator === "+"
+          && instruction.source.kind === "immediate" ? instruction.source.value | 0 : 0;
+      if (position <= span.lastWrite || increment <= 0 || span.delta !== 0) return null;
+      span.delta = increment;
+    }
+  }
+  return { counterAddress, core, spans };
+}
+
+function countedProfile(body, iterations) {
+  return body.map((instruction) => (
+    `prof[${instruction.index}]=(prof[${instruction.index}]+${iterations})>>>0;`
+  )).join("");
+}
+
+function emitStructuredSelfBackedge(body, counts, profile, sinkFallthroughPc, counted) {
   const start = body[0].index;
   const terminal = body.at(-1);
   const loop = `selfBackedge${start}`;
-  const code = body.slice(0, -1).map((instruction) => (
+  const scalarCode = body.slice(0, -1).map((instruction) => (
     `${instructionPrefix(instruction, counts.get(instruction.index) ?? "", profile)}${structuredInstruction(instruction)}`
   )).join("");
   const terminalPrefix = instructionPrefix(
     terminal, counts.get(terminal.index) ?? "", profile,
   );
   const publishBackedge = sinkFallthroughPc ? "" : `pc=${start};`;
-  return `case ${start}: { ${loop}:while(true){${code}${terminalPrefix}if(${predicate(terminal)}){${publishBackedge}continue ${loop};}pc=${terminal.index + 1};break ${loop};}continue runner; }`;
+  const scalar = `${loop}:while(true){${scalarCode}${terminalPrefix}if(${predicate(terminal)}){${publishBackedge}continue ${loop};}pc=${terminal.index + 1};break ${loop};}`;
+  if (!counted) return `case ${start}: { ${scalar}continue runner; }`;
+
+  const length = body.length;
+  const suffix = String(start);
+  const iterations = `countedIterations${suffix}`;
+  const counter = `countedCounter${suffix}`;
+  const value = `countedValue${suffix}`;
+  const spanGuards = [...counted.spans].map(([register, span]) => {
+    const first = Math.min(...span.offsets);
+    const last = Math.max(...span.offsets);
+    const begin = `counted${register}Begin${suffix}`;
+    const end = `counted${register}End${suffix}`;
+    return `const ${begin}=(${register}>>>0)+${first};const ${end}=(${register}>>>0)+(${iterations}-1)*${span.delta}+${last};if(${end}>4294967295||(${counter}>=${begin}&&${counter}<=${end}))break countedSelfBackedge${suffix};`;
+  }).join("");
+  const profileCode = profile ? countedProfile(body, iterations) : "";
+  const attemptedHeaderProfile = profile
+    ? `prof[${start}]=(prof[${start}]+1)>>>0;`
+    : "";
+  const coreCode = counted.core.map(structuredInstruction).join("");
+  const countedCode = `countedSelfBackedge${suffix}:{const ${counter}=${counted.counterAddress};if(${counter}>=m.length||!Number.isFinite(maxInstructions))break countedSelfBackedge${suffix};if(executed!==0&&executed+${length}>maxInstructions){${attemptedHeaderProfile}pc=${start};${finishRunner("budget", "executed")}}const countedTrips${suffix}=m[${counter}]===0?4294967296:(m[${counter}]>>>0);const ${iterations}=Math.min(countedTrips${suffix},executed===0?Math.max(1,Math.floor(maxInstructions/${length})):Math.floor((maxInstructions-executed)/${length}));${spanGuards}${profileCode}executed+=${iterations}*${length};let ${value}=m[${counter}]|0;for(let countedIndex${suffix}=0;countedIndex${suffix}<${iterations};countedIndex${suffix}+=1){${coreCode}${value}=(${value}-1)|0;m[${counter}]=${value};A=${value};}if(${iterations}===countedTrips${suffix}){pc=${terminal.index + 1};continue runner;}${attemptedHeaderProfile}pc=${start};${finishRunner("budget", "executed")}}`;
+  return `case ${start}: { ${countedCode}${scalar}continue runner; }`;
 }
 
 export function emitRunner(linked, options = {}) {
@@ -329,8 +487,11 @@ export function emitRunner(linked, options = {}) {
     ? new Map(instructions.map((instruction) => [instruction.index,
       `if(executed>=maxInstructions){pc=${instruction.index};${finishRunner("budget", "executed")}}executed+=1;`]))
     : budgetCounts(linked, instructions, serviceIntrinsicIds);
-  const selfBackedges = structuredSelfBackedges(
+  const selfBackedges = options.batchBudgets === false ? new Map() : structuredSelfBackedges(
     linked, instructions, serviceIntrinsicIds, counts, options.structuredSelfBackedgeLabels,
+  );
+  const countedBackedges = selectedCountedSelfBackedges(
+    linked, selfBackedges, options.countedSelfBackedgeLabels,
   );
   const cases = instructions.map((instruction, index) => {
     const sinkFallthroughPc = options.sinkFallthroughPc === true
@@ -338,7 +499,7 @@ export function emitRunner(linked, options = {}) {
     const body = selfBackedges.get(instruction.index);
     if (body) return emitStructuredSelfBackedge(
       body, counts, options.profileInstructions === true,
-      options.sinkFallthroughPc === true,
+      options.sinkFallthroughPc === true, countedBackedges.get(instruction.index),
     );
     return emitInstruction(
       instruction, serviceIntrinsicIds, serviceInlines,
@@ -403,9 +564,11 @@ export function emitStaticRunnerModule(linked, implementations, options = {}) {
     const source = emitRunner(linked, {
       instructions, serviceIntrinsicIds, serviceInlines,
       batchBudgets: options.batchBudgets,
+      profileInstructions: options.profileInstructions,
       branchFallthrough: options.branchFallthrough,
       sinkFallthroughPc: options.sinkFallthroughPc,
       structuredSelfBackedgeLabels: options.structuredSelfBackedgeLabels,
+      countedSelfBackedgeLabels: options.countedSelfBackedgeLabels,
       transfer: true,
     });
     factories.push(`function ${name}(dispatch, native) {${source}\n}`);
@@ -457,6 +620,7 @@ export function compileLinkedProject(linked, host = {}, options = {}) {
         branchFallthrough: options.branchFallthrough,
         sinkFallthroughPc: options.sinkFallthroughPc,
         structuredSelfBackedgeLabels: options.structuredSelfBackedgeLabels,
+        countedSelfBackedgeLabels: options.countedSelfBackedgeLabels,
         transfer: true,
       });
       runners.push(new Function("dispatch", "native",

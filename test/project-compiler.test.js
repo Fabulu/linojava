@@ -755,7 +755,7 @@ test("static runners execute binary64 instructions identically", async () => {
   assert.equal(dynamic.machine.memory[linked.symbols.get("result").value], 26);
 });
 
-test("structured self-backedges preserve budgets, profiles, and interior entry", async () => {
+test("counted structured self-backedges preserve budgets, profiles, and interior entry", async () => {
   const source = `
     "variables" counter17 = 0; counter18 = 0; counter26 = 0; scratch = 0;
     "programme" end;
@@ -779,10 +779,13 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
   const labels = ["Loop 17", "Loop 18", "Loop 26"];
   const generatedSource = emitStaticRunnerModule(linked, {}, {
     regionSize: 256,
+    profileInstructions: true,
     sinkFallthroughPc: true,
     structuredSelfBackedgeLabels: labels,
+    countedSelfBackedgeLabels: labels,
   });
   assert.match(generatedSource, /selfBackedge/);
+  assert.match(generatedSource, /countedSelfBackedge/);
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(generatedSource).toString("base64")}`;
   const generated = await import(moduleUrl);
   const baseline = compileLinkedProject(linked, {}, {
@@ -794,8 +797,10 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
     profileInstructions: true,
     sinkFallthroughPc: true,
     structuredSelfBackedgeLabels: labels,
+    countedSelfBackedgeLabels: labels,
   });
   const precompiled = compileLinkedProject(linked, {}, {
+    profileInstructions: true,
     precompiledRunners: {
       create: generated.createRunners,
       instructionCount: generated.instructionCount,
@@ -851,6 +856,29 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
           candidate.machine.profile, baseline.machine.profile,
           `${label} profile pc ${pc} budget ${budget}`,
         );
+        assert.deepEqual(
+          precompiled.machine.profile, baseline.machine.profile,
+          `${label} static profile pc ${pc} budget ${budget}`,
+        );
+      }
+    }
+  }
+
+  const edgeStart = linked.labels.get("loop17");
+  for (const counter of [0, 1, 2, 3, 4, 5, 79, 80, 81, -1, -0x80000000]) {
+    for (const budget of [1, 16, 17, 18, 33, 34, 35, 9_999, 10_000, 10_001]) {
+      for (const program of [baseline, candidate, precompiled]) {
+        initialize(program, edgeStart);
+        program.machine.memory[at("counter17")] = counter;
+      }
+      for (let continuation = 0; continuation < 3; continuation += 1) {
+        const expected = baseline.run(budget);
+        assert.deepEqual(candidate.run(budget), expected, `counter ${counter} budget ${budget}`);
+        assert.deepEqual(precompiled.run(budget), expected, `static counter ${counter} budget ${budget}`);
+        assert.deepEqual(state(candidate), state(baseline));
+        assert.deepEqual(state(precompiled), state(baseline));
+        assert.deepEqual(candidate.machine.profile, baseline.machine.profile);
+        assert.deepEqual(precompiled.machine.profile, baseline.machine.profile);
       }
     }
   }
@@ -869,6 +897,165 @@ test("structured self-backedges preserve budgets, profiles, and interior entry",
   assert.deepEqual(callStates[1], callStates[0]);
   assert.deepEqual(callStates[2], callStates[0]);
   assert.deepEqual(candidate.machine.profile, baseline.machine.profile);
+  assert.deepEqual(precompiled.machine.profile, baseline.machine.profile);
+});
+
+test("counted self-backedge guards counter aliases and rejects nonmatching loops", async () => {
+  const source = `
+    "variables" counter = 0; scratch = 0;
+    "programme" end;
+    "Guarded Loop"
+      [D]+;
+      [counter]-; A = [counter]; ? A != 0 -> Guarded Loop;
+    "Guarded done" leave;
+  `;
+  const project = await loadProject("counted-self-backedge-guard.lino", {
+    resolveSource() { return source; },
+  });
+  const linked = linkProject(project);
+  const labels = ["Guarded Loop"];
+  const generatedSource = emitStaticRunnerModule(linked, {}, {
+    regionSize: 256,
+    profileInstructions: true,
+    sinkFallthroughPc: true,
+    structuredSelfBackedgeLabels: labels,
+    countedSelfBackedgeLabels: labels,
+  });
+  assert.match(generatedSource, /countedSelfBackedge/);
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(generatedSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const baseline = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    profileInstructions: true,
+  });
+  const candidate = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    profileInstructions: true,
+    sinkFallthroughPc: true,
+    structuredSelfBackedgeLabels: labels,
+    countedSelfBackedgeLabels: labels,
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    profileInstructions: true,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const at = (name) => linked.symbols.get(name).value;
+  const start = linked.labels.get("guardedloop");
+  for (const address of [at("counter"), at("scratch")]) {
+    for (const counter of [1, 4]) {
+      for (const budget of [1, 3, 4, 7, 8, 9, 100]) {
+        for (const program of [baseline, candidate, precompiled]) {
+          program.reset();
+          program.machine.pc = start;
+          program.machine.D = address;
+          program.machine.memory[at("counter")] = counter;
+        }
+        const expected = baseline.run(budget);
+        assert.deepEqual(candidate.run(budget), expected);
+        assert.deepEqual(precompiled.run(budget), expected);
+        assert.deepEqual(candidate.machine.memory, baseline.machine.memory);
+        assert.deepEqual(precompiled.machine.memory, baseline.machine.memory);
+        assert.deepEqual(
+          [candidate.machine.A, candidate.machine.D, candidate.machine.pc],
+          [baseline.machine.A, baseline.machine.D, baseline.machine.pc],
+        );
+        assert.deepEqual(candidate.machine.profile, baseline.machine.profile);
+        assert.deepEqual(precompiled.machine.profile, baseline.machine.profile);
+      }
+    }
+  }
+
+  for (const [name, loop] of [
+    ["direct alias", "[counter]+; [counter]-; A = [counter]; ? A != 0 -> Loop;"],
+    ["nonmatching suffix", "[scratch]+; [counter]-; ? [counter] != 0 -> Loop;"],
+  ]) {
+    const rejected = await loadProject(`${name}.lino`, {
+      resolveSource() {
+        return `"variables" counter=1; scratch=0; "programme" end; "Loop" ${loop} leave;`;
+      },
+    });
+    const rejectedLinked = linkProject(rejected);
+    const rejectedSource = emitStaticRunnerModule(rejectedLinked, {}, {
+      regionSize: 256,
+      structuredSelfBackedgeLabels: ["Loop"],
+      countedSelfBackedgeLabels: ["Loop"],
+    });
+    assert.doesNotMatch(rejectedSource, /countedSelfBackedge/);
+    assert.match(rejectedSource, /selfBackedge/);
+  }
+});
+
+test("structured loop options fail closed with unbatched budgets", async () => {
+  const source = `
+    "variables" counter = 0; scratch = 0;
+    "programme" end;
+    "Loop"
+      [scratch]+;
+      [counter]-; A = [counter]; ? A != 0 -> Loop;
+    "Done" leave;
+  `;
+  const project = await loadProject("unbatched-structured-loop.lino", {
+    resolveSource() { return source; },
+  });
+  const linked = linkProject(project);
+  const labels = ["Loop"];
+  const generatedSource = emitStaticRunnerModule(linked, {}, {
+    regionSize: 256,
+    batchBudgets: false,
+    profileInstructions: true,
+    sinkFallthroughPc: true,
+    structuredSelfBackedgeLabels: labels,
+    countedSelfBackedgeLabels: labels,
+  });
+  assert.doesNotMatch(generatedSource, /selfBackedge/);
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(generatedSource).toString("base64")}`;
+  const generated = await import(moduleUrl);
+  const baseline = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    batchBudgets: false,
+    profileInstructions: true,
+  });
+  const candidate = compileLinkedProject(linked, {}, {
+    regionSize: 256,
+    batchBudgets: false,
+    profileInstructions: true,
+    sinkFallthroughPc: true,
+    structuredSelfBackedgeLabels: labels,
+    countedSelfBackedgeLabels: labels,
+  });
+  const precompiled = compileLinkedProject(linked, {}, {
+    batchBudgets: false,
+    profileInstructions: true,
+    precompiledRunners: {
+      create: generated.createRunners,
+      instructionCount: generated.instructionCount,
+      regionSize: generated.regionSize,
+    },
+  });
+  const counter = linked.symbols.get("counter").value;
+  const scratch = linked.symbols.get("scratch").value;
+  const start = linked.labels.get("loop");
+  for (const budget of [0, 1, 2, 3, 4, 7, 8, 9, 100]) {
+    for (const program of [baseline, candidate, precompiled]) {
+      program.reset();
+      program.machine.pc = start;
+      program.machine.memory[counter] = 4;
+      program.machine.memory[scratch] = 0x12345678;
+    }
+    for (let continuation = 0; continuation < 3; continuation += 1) {
+      const expected = baseline.run(budget);
+      assert.deepEqual(candidate.run(budget), expected);
+      assert.deepEqual(precompiled.run(budget), expected);
+      assert.deepEqual(candidate.machine.memory, baseline.machine.memory);
+      assert.deepEqual(precompiled.machine.memory, baseline.machine.memory);
+      assert.deepEqual(candidate.machine.profile, baseline.machine.profile);
+      assert.deepEqual(precompiled.machine.profile, baseline.machine.profile);
+    }
+  }
 });
 
 test("fallthrough PC sinking preserves region, callback, and nested-call boundaries", async () => {
