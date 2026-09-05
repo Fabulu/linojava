@@ -147,6 +147,90 @@ function exerciseDirectNoctisWorkspaces(linked) {
   assert.equal(machine.memory[at("VHGNDanisingle")], 0);
 }
 
+function firstMemoryDifference(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return index;
+  }
+  return -1;
+}
+
+function assertMachineStateEqual(actual, expected, label) {
+  assert.deepEqual(
+    [actual.A, actual.B, actual.C, actual.D, actual.E, actual.X, actual.depth],
+    [expected.A, expected.B, expected.C, expected.D, expected.E, expected.X, expected.depth],
+    `${label} terminal machine state`,
+  );
+  const difference = firstMemoryDifference(actual.memory, expected.memory);
+  assert.equal(
+    difference,
+    -1,
+    difference < 0 ? `${label} memory` : `${label} memory differs at word ${difference}: ${actual.memory[difference]} != ${expected.memory[difference]}`,
+  );
+}
+
+function exerciseVhguiServices(linked) {
+  const allIntrinsics = createNoctisIntrinsics();
+  const compose = allIntrinsics[SERVICES.vhguiCompose];
+  const fixed2x = allIntrinsics[SERVICES.vhguiFixed2x];
+  assert.equal(typeof compose, "function");
+  assert.equal(typeof fixed2x, "function");
+
+  const fallbackIntrinsics = { ...allIntrinsics };
+  delete fallbackIntrinsics[SERVICES.vhguiCompose];
+  delete fallbackIntrinsics[SERVICES.vhguiFixed2x];
+  let composeCalls = 0;
+  let fixed2xCalls = 0;
+  const directIntrinsics = {
+    ...allIntrinsics,
+    [SERVICES.vhguiCompose](machine, directLinked) {
+      composeCalls += 1;
+      compose(machine, directLinked);
+    },
+    [SERVICES.vhguiFixed2x](machine, directLinked) {
+      fixed2xCalls += 1;
+      fixed2x(machine, directLinked);
+    },
+  };
+  const fallback = compileLinkedProject(linked, {}, { intrinsics: fallbackIntrinsics });
+  const direct = compileLinkedProject(linked, {}, { intrinsics: directIntrinsics });
+  const at = (name) => linked.symbols.get(canonicalName(name)).value;
+  for (const program of [fallback, direct]) {
+    const { machine } = program;
+    machine.A = 11;
+    machine.B = -22;
+    machine.C = 33;
+    machine.D = -44;
+    machine.E = 55;
+    machine.X = 0x646f6e65;
+    machine.memory[at("Display Width")] = 640;
+    machine.memory[at("Display Height")] = 400;
+    const workArea = at("Work Area");
+    machine.memory.set([0, 0, 639, 399], workArea);
+    const source = at("nw") + at("RADPT");
+    const palette = at("pal");
+    for (let index = 0; index < 256; index += 1) {
+      machine.memory[palette + index] = Math.imul(index, 0x010307) | 0;
+    }
+    for (let index = 0; index < 64_000; index += 1) {
+      machine.memory[source + index] = (index * 37 + (index >>> 8)) & 255;
+    }
+  }
+
+  const call = (program, name) => program.machine.callCode(
+    linked.labels.get(canonicalName(name)) + 1,
+    20_000_000,
+  );
+  call(fallback, "VHGUI prepare");
+  call(direct, "VHGUI prepare");
+  assert.equal(composeCalls, 1);
+  assertMachineStateEqual(direct.machine, fallback.machine, "VHGUI compose service");
+
+  call(fallback, "VHGUI present");
+  call(direct, "VHGUI present");
+  assert.equal(fixed2xCalls, 1);
+  assertMachineStateEqual(direct.machine, fallback.machine, "VHGUI fixed-2x service");
+}
+
 function exercisePhysicalPanelGlyph(linked) {
   const intrinsics = createNoctisIntrinsics();
   const program = compileLinkedProject(linked, {}, { intrinsics });
@@ -207,6 +291,7 @@ test("current shared Noctis and NIVGEN closures emit static runners", {
   assert.equal(game.stockfiles.length, 23);
   const linkedGame = linkProject(game);
   exerciseDirectNoctisWorkspaces(linkedGame);
+  exerciseVhguiServices(linkedGame);
   exercisePhysicalPanelGlyph(linkedGame);
   await instantiateStaticRunners(linkedGame);
 
