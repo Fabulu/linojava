@@ -231,6 +231,48 @@ function exerciseVhguiServices(linked) {
   assertMachineStateEqual(direct.machine, fallback.machine, "VHGUI fixed-2x service");
 }
 
+function exerciseStarSmoothService(linked) {
+  const allIntrinsics = createNoctisIntrinsics();
+  const smooth = allIntrinsics[SERVICES.starSmoothGrays];
+  assert.equal(typeof smooth, "function");
+
+  const fallbackIntrinsics = { ...allIntrinsics };
+  delete fallbackIntrinsics[SERVICES.starSmoothGrays];
+  let smoothCalls = 0;
+  const directIntrinsics = {
+    ...allIntrinsics,
+    [SERVICES.starSmoothGrays](machine, directLinked) {
+      smoothCalls += 1;
+      smooth(machine, directLinked);
+    },
+  };
+  const fallback = compileLinkedProject(linked, {}, { intrinsics: fallbackIntrinsics });
+  const direct = compileLinkedProject(linked, {}, { intrinsics: directIntrinsics });
+  const at = (name) => linked.symbols.get(canonicalName(name)).value;
+  const base = at("nw") + at("RADPT") + 2880;
+  for (const program of [fallback, direct]) {
+    const { machine } = program;
+    machine.A = 11;
+    machine.B = -22;
+    machine.C = 33;
+    machine.D = -44;
+    machine.E = 55;
+    machine.X = 0x646f6e65;
+    for (let index = 0; index < 58240; index += 1) {
+      machine.memory[base + index] = (index * 197 + (index >>> 7) * 29 + 255) & 255;
+    }
+  }
+
+  const call = (program, name) => program.machine.callCode(
+    linked.labels.get(canonicalName(name)) + 1,
+    20_000_000,
+  );
+  call(fallback, "VHT premask smooth");
+  call(direct, "VHT premask smooth");
+  assert.equal(smoothCalls, 1);
+  assertMachineStateEqual(direct.machine, fallback.machine, "VHT smooth-grays service");
+}
+
 function exercisePhysicalPanelGlyph(linked) {
   const intrinsics = createNoctisIntrinsics();
   const program = compileLinkedProject(linked, {}, { intrinsics });
@@ -292,6 +334,7 @@ test("current shared Noctis and NIVGEN closures emit static runners", {
   const linkedGame = linkProject(game);
   exerciseDirectNoctisWorkspaces(linkedGame);
   exerciseVhguiServices(linkedGame);
+  exerciseStarSmoothService(linkedGame);
   exercisePhysicalPanelGlyph(linkedGame);
   await instantiateStaticRunners(linkedGame);
 
