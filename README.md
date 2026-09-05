@@ -83,12 +83,12 @@ hosts can resume on the correct clock instead of spinning.
 
 Direct calls can use an exact portable service fast path when one is available.
 The production families cover hot arithmetic, projection, conversion, terrain,
-and framebuffer routines. Version 0.5.0 adds exact palette-composition and
-fixed-2x presentation services for Noctis. Their callable implementations and
-all control flow remain in the shared Lino closure; if either service is absent,
-the same linked Lino routine runs as the authoritative fallback. Differential
-tests compare the complete workspace and terminal register state between both
-paths. The browser host also implements queued console characters, the live
+and framebuffer routines. Version 0.5.0 adds exact palette-composition,
+fixed-2x presentation, and packed in-place star-page smoothing services for
+Noctis. Their callable implementations and all control flow remain in the
+shared Lino closure; if any service is absent, the same linked Lino routine
+runs as the authoritative fallback. Differential tests compare the complete
+workspace and terminal register state between both paths. The browser host also implements queued console characters, the live
 held-key table, pointer state, monotonic counts, and millisecond sleeps, which
 provides both ASCII commands and physical WASD, arrow, modifier, function, and
 keypad controls.
