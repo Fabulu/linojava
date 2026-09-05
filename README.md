@@ -10,7 +10,7 @@ native JavaScript arithmetic over an `Int32Array` Lino workspace. Straight-line
 instructions fall through generated JavaScript cases without paying a switch
 dispatch for every source statement. Large projects are split into bounded
 2,048-instruction runners, so Chromium does not have to compile or enter one
-pathological 56,000-case function. The browser
+pathological monolithic function. The browser
 host owns display, input, audio, persistence, and other `isocall` services.
 JavaScript is the product backend: performance work compiles larger Lino regions
 into optimized JavaScript and replaces historical native fragments with exact
@@ -64,14 +64,15 @@ entry remains available for small single-source programs. Browser presentation
 of the real iGUI framebuffer and pointer-driven menu is live at
 [linoctis.pages.dev](https://linoctis.pages.dev/).
 
-The current Noctis closure loads 73 modules and lowers to 56,945 JavaScript
+The current Noctis closure loads 74 modules and lowers to 69,112 Lino
 instructions. All ordinary statements now parse, including unsigned apostrophe
-arithmetic and float predicates. Its 204 embedded native fragment occurrences
-map to 202 explicit intrinsic IDs rather than hidden interpreter operations.
-Portable JavaScript now implements all 202 IDs across integer, framebuffer,
-page-memory, raster, projection, x87, geometry, terrain, and conversion
-families. Missing native fragments in another Lino project remain explicit
-compile errors instead of silently changing program behavior.
+arithmetic and float predicates. The runtime exposes every selected raw-block
+identifier and named service as an explicit intrinsic ID rather than a hidden
+interpreter operation. Portable JavaScript implementations cover integer,
+framebuffer, page-memory, raster, projection, x87, geometry, terrain,
+conversion, and presentation families. Missing native fragments in another
+Lino project remain explicit compile errors instead of silently changing
+program behavior.
 
 A focused full-game boot advances through initialization, rendering, repeated
 `RETRACE` calls, and the frame clock's real millisecond `SLEEP` contract. The
@@ -81,13 +82,18 @@ already supported. Yield results carry the requested sleep duration so browser
 hosts can resume on the correct clock instead of spinning.
 
 Direct calls can use an exact portable service fast path when one is available.
-The first production family covers the hot `PGF` slot, conversion, and scalar
-arithmetic services used throughout Noctis polygon projection. The browser host
-also implements queued console characters, the live held-key table, pointer
-state, monotonic counts, and millisecond sleeps, which provides both ASCII
-commands and physical WASD, arrow, modifier, function, and keypad controls.
+The production families cover hot arithmetic, projection, conversion, terrain,
+and framebuffer routines. Version 0.5.0 adds exact palette-composition and
+fixed-2x presentation services for Noctis. Their callable implementations and
+all control flow remain in the shared Lino closure; if either service is absent,
+the same linked Lino routine runs as the authoritative fallback. Differential
+tests compare the complete workspace and terminal register state between both
+paths. The browser host also implements queued console characters, the live
+held-key table, pointer state, monotonic counts, and millisecond sleeps, which
+provides both ASCII commands and physical WASD, arrow, modifier, function, and
+keypad controls.
 
-The complete 73-module project has now reached real game frames in Chromium.
+The complete 74-module project has now reached real game frames in Chromium.
 A focused browser smoke rendered the cupola framebuffer, advanced across five
 frames, accepted held W and Left Arrow input, and produced no page or console
 errors. Renderer fidelity and complete game-mode coverage remain separate
