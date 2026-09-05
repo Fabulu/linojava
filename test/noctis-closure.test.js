@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 import { linkProject } from "../src/compiler/linker.js";
 import { canonicalName } from "../src/compiler/lexer.js";
 import { loadProject } from "../src/compiler/project-loader.js";
-import { emitStaticRunnerModule } from "../src/compiler/project-compiler.js";
+import {
+  compileLinkedProject,
+  emitStaticRunnerModule,
+} from "../src/compiler/project-compiler.js";
 import {
   createNoctisIntrinsics,
   NOCTIS_SERVICE_INTRINSIC_IDS as SERVICES,
@@ -144,6 +147,58 @@ function exerciseDirectNoctisWorkspaces(linked) {
   assert.equal(machine.memory[at("VHGNDanisingle")], 0);
 }
 
+function exercisePhysicalPanelGlyph(linked) {
+  const intrinsics = createNoctisIntrinsics();
+  const program = compileLinkedProject(linked, {}, { intrinsics });
+  const { machine } = program;
+  const at = (name) => linked.symbols.get(canonicalName(name)).value;
+  const call = (name, budget = 20_000_000) => machine.callCode(
+    linked.labels.get(canonicalName(name)) + 1,
+    budget,
+  );
+  const view = new DataView(machine.memory.buffer);
+  const slot = (name) => view.getFloat64(
+    (at("fw") + at(name) * 2) * 4,
+    true,
+  );
+
+  call("SP build rgt");
+  call("SP riga init");
+  call("PGF constants");
+  call("VH view init");
+
+  assert.equal(slot("FSINVD"), Math.fround(1 / 210));
+  assert.equal(slot("FSXCO"), Math.fround(16 / 210));
+  assert.equal(slot("FSYCO"), Math.fround(16 / 210));
+
+  machine.memory[at("VHVcamxi")] = 525;
+  machine.memory[at("VHVcamyi")] = 0;
+  machine.memory[at("VHVcamzi")] = -740;
+  machine.memory[at("VHValpha")] = 0;
+  machine.memory[at("VHVbeta")] = 0;
+  call("VH set view");
+
+  const character = "S".codePointAt(0);
+  const glyph = at("digimap2") + (character - 32) * 36;
+  machine.memory.fill(-1, glyph, glyph + 36);
+  machine.memory[at("VHPchar")] = character;
+  machine.memory[at("VHPchcol")] = 152;
+  machine.memory[at("VHPline")] = 0;
+  machine.memory[at("VHPcx4")] = 2100;
+
+  const framebuffer = at("nw") + at("SADPT");
+  const before = machine.memory.slice(framebuffer, framebuffer + 320 * 200);
+  call("VHP digit row0");
+  const changed = machine.memory
+    .subarray(framebuffer, framebuffer + 320 * 200)
+    .reduce((count, value, index) => count + (value !== before[index] ? 1 : 0), 0);
+  const texturePixels = machine.memory
+    .subarray(at("nw") + at("RPSM"), at("nw") + at("RPSM") + 9216)
+    .reduce((count, value) => count + ((value & 255) !== 0 ? 1 : 0), 0);
+  assert.ok(texturePixels > 0, "physical panel glyph populates its mapped texture");
+  assert.ok(changed > 0, "physical panel glyph reaches the destination framebuffer");
+}
+
 test("current shared Noctis and NIVGEN closures emit static runners", {
   skip: !existsSync(GAME_ENTRY) && `No sibling Linoleum checkout at ${LINO_ROOT}`,
 }, async () => {
@@ -152,6 +207,7 @@ test("current shared Noctis and NIVGEN closures emit static runners", {
   assert.equal(game.stockfiles.length, 23);
   const linkedGame = linkProject(game);
   exerciseDirectNoctisWorkspaces(linkedGame);
+  exercisePhysicalPanelGlyph(linkedGame);
   await instantiateStaticRunners(linkedGame);
 
   let source = (await readFile(GAME_ENTRY, "utf8")).replaceAll("\r\n", "\n");

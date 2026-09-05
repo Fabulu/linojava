@@ -1188,6 +1188,12 @@ test("Noctis integer and framebuffer intrinsics preserve the native kernels", ()
   memory[at("PGFt")] = 0x3fa00000;
   run(SERVICES.pgfSetFloat32);
   assert.equal(view.getFloat64((at("fw") + 10) * 4, true), 1.25);
+  memory[at("PGFi")] = 6;
+  view.setFloat64((at("fw") + 12) * 4, 123, true);
+  view.setFloat64(at("FA0") * 4, 1 / 210, true);
+  run(SERVICES.pgfNarrow);
+  assert.equal(view.getFloat64(at("FA0") * 4, true), Math.fround(1 / 210));
+  assert.equal(view.getFloat64((at("fw") + 12) * 4, true), Math.fround(1 / 210));
   view.setFloat64(at("FA0") * 4, 2.5, true);
   run(SERVICES.pgfInteger);
   assert.equal(memory[at("FI")], 2);
